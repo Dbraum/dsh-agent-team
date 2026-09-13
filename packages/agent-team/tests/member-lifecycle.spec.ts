@@ -4076,6 +4076,65 @@ describe('Agent Team Member private memory directory sanitization (issue #7)', (
     }
   })
 
+  it('refuses to migrate recorded private memory that lives under another DSH home', async () => {
+    const { ctx, root } = await realHarness()
+    // The recorded path is a durable absolute fact. In a process resolving a
+    // different DSH home (an isolated test home, a second instance) the
+    // sanitized target lands in THAT home while the record still names the real
+    // Member directory; renaming across trees took one whole private memory out
+    // of ~/.dsh on 2026-09-13, silently. The live harness keeps DSH_HOME at
+    // <root>/dsh-home, so <root>/other-home is a foreign home.
+    const memberId = 'member:1a2b3c4d-0000-4000-8000-000000000003' as AgentTeamMemberId
+    const legacyPath = join(root, 'other-home', 'agent-team', 'members', memberId.replaceAll(':', '-'))
+    await mkdir(join(legacyPath, 'notes'), { recursive: true })
+    await writeFile(join(legacyPath, 'notes', 'kept.md'), 'real private memory')
+    const sanitized = join(process.env.DSH_HOME!, 'agent-team', 'members', memberId.replaceAll(':', '-'))
+
+    const { MemberRuntime } = await import('../src/member-runtime.ts')
+    const runtime = new MemberRuntime({ ctx: ctx as never, liveMemberContext: () => { throw new Error('unused') }, runningAgents: new Set() })
+    await runtime.initializePrivateMemory(sanitized, legacyPath)
+
+    // The foreign directory is untouched — not moved, and not copied either: a
+    // copy would leak the Member's private memory into the foreign home.
+    await expect(readFile(join(legacyPath, 'notes', 'kept.md'), 'utf8')).resolves.toBe('real private memory')
+    await expect(access(join(legacyPath, 'memory.md'))).rejects.toThrow()
+    // This home still provisions the Member, from scratch and in place.
+    await expect(readFile(join(sanitized, 'memory.md'), 'utf8')).resolves.toContain('# Member memory')
+    await expect(access(join(sanitized, 'notes'))).resolves.toBeUndefined()
+  })
+
+  it('deletes recorded private memory only inside this DSH home', async () => {
+    const { ctx, root, archived } = await realHarness()
+    const { MemberRuntime } = await import('../src/member-runtime.ts')
+    const runtime = new MemberRuntime({ ctx: ctx as never, liveMemberContext: () => { throw new Error('unused') }, runningAgents: new Set() })
+
+    // A removal running under another DSH home must not delete the directory
+    // the record names: that is the real Member's private memory, and this is
+    // the shape that wiped three live directories on 2026-08-23.
+    const foreignId = 'member:1a2b3c4d-0000-4000-8000-000000000004' as AgentTeamMemberId
+    const foreignPath = join(root, 'other-home', 'agent-team', 'members', foreignId)
+    await mkdir(join(foreignPath, 'notes'), { recursive: true })
+    await writeFile(join(foreignPath, 'notes', 'kept.md'), 'real private memory')
+    await runtime.cleanupRemovedMember({ memberId: foreignId, sessionId: SessionId('session:probe-foreign-cleanup'), privateMemoryPath: foreignPath } as never)
+    await expect(readFile(join(foreignPath, 'notes', 'kept.md'), 'utf8')).resolves.toBe('real private memory')
+
+    // Same home: both the recorded legacy colon directory and its sanitized
+    // spelling are this process's to remove.
+    const parent = join(process.env.DSH_HOME!, 'agent-team', 'members')
+    const localId = 'member:1a2b3c4d-0000-4000-8000-000000000005' as AgentTeamMemberId
+    const colonPath = join(parent, localId)
+    const sanitizedPath = join(parent, localId.replaceAll(':', '-'))
+    const colonDirectoryExists = process.platform !== 'win32'
+    if (colonDirectoryExists) await mkdir(join(colonPath, 'notes'), { recursive: true })
+    await mkdir(join(sanitizedPath, 'notes'), { recursive: true })
+    await runtime.cleanupRemovedMember({ memberId: localId, sessionId: SessionId('session:probe-local-cleanup'), privateMemoryPath: colonPath } as never)
+    await expect(access(sanitizedPath)).rejects.toThrow()
+    if (colonDirectoryExists) await expect(access(colonPath)).rejects.toThrow()
+
+    // The refusal is scoped to the filesystem: both Sessions are archived.
+    expect(archived).toEqual([SessionId('session:probe-foreign-cleanup'), SessionId('session:probe-local-cleanup')])
+  })
+
   it('merges a hand-created colon twin directory into the sanitized root on activation', async () => {
     // The twin is NOT the ledger legacy directory: it is a directory the
     // Member's own tool call created under the identity-ref spelling after

@@ -15,12 +15,13 @@
  */
 
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type {
   AgentTeamAgentMember,
   AgentTeamCapabilityWarning,
@@ -246,7 +247,8 @@ export class MemberRuntime {
    * `privateMemoryPath` is a durable Member fact the renewal path cannot
    * rewrite: when the legacy directory exists it is renamed onto the sanitized
    * path once (same-parent rename, atomic), so existing private memory
-   * survives instead of being silently orphaned.
+   * survives instead of being silently orphaned. A recorded path that names a
+   * different DSH home is never acted on — see `migrateLegacyMemoryDirectory`.
    *
    * A colon-form twin directory is also merged when it exists: a Member may
    * have written files under the ledger identity spelling (the branded
@@ -259,7 +261,13 @@ export class MemberRuntime {
    * and twin-only notes/skills are moved in without overwriting.
    */
   async initializePrivateMemory(path: string, legacyPath?: string): Promise<void> {
-    if (legacyPath !== undefined && legacyPath !== path) await migrateLegacyMemoryDirectory(legacyPath, path)
+    if (legacyPath !== undefined && legacyPath !== path) {
+      const migration = await migrateLegacyMemoryDirectory(legacyPath, path)
+      // A refusal means the record names a directory in ANOTHER DSH home: this
+      // process provisions the Member fresh here instead of taking that
+      // directory out of its own home.
+      if (migration === 'refused-foreign-home') this.deps.ctx.logger.warn(`agent-team: refused to migrate the recorded Member private memory '${legacyPath}' into '${path}': they are not in the same directory, so the recorded directory names a different DSH home and is left untouched`)
+    }
     const twinPath = twinMemoryDirectoryPath(path)
     if (twinPath !== undefined) await mergeTwinMemoryDirectory(twinPath, path)
     await mkdir(join(path, 'notes'), { recursive: true })
@@ -275,12 +283,19 @@ export class MemberRuntime {
   async cleanupRemovedMember(member: AgentTeamAgentMember): Promise<void> {
     // The ledger path may still name the legacy colon directory (never
     // activated after the fix): remove both spellings; rm is force-tolerant
-    // of the one that does not exist.
+    // of the one that does not exist. Every target must sit inside THIS
+    // process's members root: the recorded path is a durable absolute fact,
+    // and a process resolving another DSH home (an isolated test home, a
+    // second instance) would otherwise delete the directory that fact names —
+    // the real Member's private memory.
     const sanitized = memberMemoryDirectoryPath(member)
+    const targets = sanitized === member.privateMemoryPath ? [sanitized] : [sanitized, member.privateMemoryPath]
+    const owned = targets.filter(target => isInsideMembersRoot(target))
+    const refused = targets.filter(target => !isInsideMembersRoot(target))
+    if (refused.length > 0) this.deps.ctx.logger.warn(`agent-team: refused to delete recorded Member private memory outside this DSH home: ${refused.map(target => `'${target}'`).join(', ')}`)
     const results = await Promise.allSettled([
       this.deps.ctx.workspaceRegistry.archiveSession(member.sessionId),
-      rm(sanitized, { recursive: true, force: true }),
-      ...(sanitized === member.privateMemoryPath ? [] : [rm(member.privateMemoryPath, { recursive: true, force: true })]),
+      ...owned.map(target => rm(target, { recursive: true, force: true })),
     ])
     const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
     if (failures.length > 0) throw new AggregateError(failures, `failed to clean up removed Member '${member.memberId}'`)
@@ -308,28 +323,61 @@ export class MemberRuntime {
   }
 }
 
+/** What one activation-time legacy-memory migration did; only a refusal needs the caller to speak. */
+type LegacyMemoryMigration =
+  /** No recorded legacy directory exists: fresh install, or already migrated away. */
+  | 'absent'
+  /** The sanitized directory is already there: migration done, or a new install. */
+  | 'target-present'
+  /** Renamed within one parent directory. */
+  | 'migrated'
+  /** The record names a directory in another DSH home: nothing was touched. */
+  | 'refused-foreign-home'
+
 /**
  * One-time in-place migration of a pre-fix colon-named private memory
  * directory onto its sanitized path. A sanitized target that already exists
  * wins (idempotent across restarts and partially migrated installs); a legacy
  * source that never existed is simply the fresh-install case.
+ *
+ * The rename is confined to one parent directory, which is what the migration
+ * has always meant: the recorded path is a durable absolute fact, so a process
+ * resolving a different DSH home (an isolated test home, a second instance, a
+ * moved home) holds a sanitized target in ITS tree while the record still names
+ * the real one. Renaming across trees would take a Member's whole private
+ * memory out of its home — silently, since only the next session notices an
+ * empty index. Such a source is left exactly where it is.
  */
-async function migrateLegacyMemoryDirectory(legacyPath: string, path: string): Promise<void> {
+async function migrateLegacyMemoryDirectory(legacyPath: string, path: string): Promise<LegacyMemoryMigration> {
   let legacy: Awaited<ReturnType<typeof stat>>
   try {
     legacy = await stat(legacyPath)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'absent'
     throw error
   }
   if (!legacy.isDirectory()) throw new Error(`legacy Member memory path '${legacyPath}' exists but is not a directory`)
+  if (dirname(legacyPath) !== dirname(path)) return 'refused-foreign-home'
   try {
     await stat(path)
-    return // Sanitized directory already present: migration already done or a new install.
+    return 'target-present' // Sanitized directory already present: migration already done or a new install.
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
   await rename(legacyPath, path)
+  return 'migrated'
+}
+
+/**
+ * Whether one absolute path names a Member directory inside THIS process's
+ * members root. Only such a path is this process's to delete: a recorded path
+ * may name the same Member in another DSH home, where the removal happening
+ * here has no authority.
+ */
+function isInsideMembersRoot(candidate: string): boolean {
+  const fromRoot = relative(dshHomePath('agent-team', 'members'), resolve(candidate))
+  // '' is the members root itself and '..' escapes it: only a real descendant is authorized.
+  return fromRoot.length > 0 && !fromRoot.startsWith('..') && !isAbsolute(fromRoot)
 }
 
 /** The colon-form twin path of one sanitized Member memory directory, when the segment form admits one. */
