@@ -583,7 +583,12 @@ export interface AgentTeamContextAdvice {
 }
 
 export interface AgentTeamThreadReadResult {
-  readonly receipt: AgentTeamOperationReceipt
+  /**
+   * Receipt of the durable read this response committed; absent when the read
+   * made no progress — an already-read Thread whose watermark did not move —
+   * so no operation was appended and there is nothing to point at.
+   */
+  readonly receipt?: AgentTeamOperationReceipt
   readonly task?: AgentTeamTask
   readonly thread: AgentTeamThread
   readonly claims: readonly AgentTeamClaim[]
@@ -698,10 +703,17 @@ export type AgentTeamChangeScope =
    */
   | { readonly kind: 'presence'; readonly workspaceId: WorkspaceId }
 
-/** Cursor for the lightweight Client invalidation stream. */
+/**
+ * Cursor for the lightweight Client invalidation stream. A version is only
+ * meaningful inside the domain of the scope it was issued for: a presence
+ * scope counts process-local wake edges, every other scope counts the durable
+ * ledger position of the newest commit that changed a shared projection. A
+ * private read therefore moves no cursor at all, and a cursor must not be
+ * carried from one scope to another.
+ */
 export interface AgentTeamChangesRequest {
   readonly afterVersion: number
-  /** Restrict wake-ups to one projection scope; omit to observe every Team change. */
+  /** Restrict wake-ups to one projection scope; omit to observe every shared projection change. */
   readonly scope?: AgentTeamChangeScope
 }
 

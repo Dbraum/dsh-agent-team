@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ChangeEvent, ClipboardEvent, KeyboardEvent } from 'react'
 import type { AgentTeamClientMemberStatus, AgentTeamMemberId } from '@wowyuarm/dsh-agent-team/types'
 import { IconChecklistOutline14, IconPaperclipOutline16, IconSendOutline16, Tooltip, useAnchoredMaxHeight, useDismissOnOutsidePointer } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TeamConversationProps } from './slots.ts'
+import type { TeamDraftKey, TeamDraftStore } from './drafts.ts'
 import { TeamPresenceDot } from './TeamPresenceDot.tsx'
 import css from './composer.module.css'
 import { formatByteSize } from './attachment-preview.ts'
@@ -71,17 +72,22 @@ function draftPreviewUrl(file: File): string | undefined {
   return url
 }
 
-export function TeamComposer({ members, followerMemberIds, recipients, draft, pending, confirmation, error, onDraftChange, onRecipientsChange, onSubmit, placeholder, pendingFiles, onFilesChange, asTask, onAsTaskChange, t }: {
+export function TeamComposer({ members, followerMemberIds, drafts, draftKey, pending, confirmation, error, onEdit, onSubmit, placeholder, pendingFiles, onFilesChange, asTask, onAsTaskChange, t }: {
   readonly members: readonly AgentTeamClientMemberStatus[]
   /** Current Thread followers; the Thread surface passes them so they rank above other candidates. */
   readonly followerMemberIds?: ReadonlySet<AgentTeamMemberId>
-  readonly recipients: ReadonlySet<AgentTeamMemberId>
-  readonly draft: string
+  /**
+   * The draft cache this composer subscribes to: owning the subscription here
+   * instead of in the hosting page keeps a keystroke from re-rendering the
+   * timeline around it.
+   */
+  readonly drafts: TeamDraftStore
+  readonly draftKey: TeamDraftKey
   readonly pending: boolean
   readonly confirmation?: string
   readonly error?: string
-  readonly onDraftChange: (draft: string) => void
-  readonly onRecipientsChange: (recipients: ReadonlySet<AgentTeamMemberId>) => void
+  /** The Human edited the draft: the hosting page drops its one-shot send state. */
+  readonly onEdit?: () => void
   readonly onSubmit: () => void
   /** Conversation-specific prompt; the shared default fits Channel surfaces. */
   readonly placeholder?: string
@@ -99,6 +105,10 @@ export function TeamComposer({ members, followerMemberIds, recipients, draft, pe
   const menuRef = useRef<HTMLDivElement>(null)
   const activeOptionRef = useRef<HTMLButtonElement>(null)
   const composingRef = useRef(false)
+  // The draft lives in the injected cache so a view switch or refresh does not
+  // cost the half-written message. Subscribing here — not in the page that
+  // hosts this composer — is what keeps a keystroke off the timeline.
+  const { draft, recipients } = useSyncExternalStore(drafts.subscribe, () => drafts.getSnapshot(draftKey))
   const [mention, setMention] = useState<MentionMatch>()
   const [highlight, setHighlight] = useState(0)
   // @all is a composer-layer expansion of the same eligibility filter a
@@ -164,7 +174,7 @@ export function TeamComposer({ members, followerMemberIds, recipients, draft, pe
       const member = knownMembers.get(memberId)
       return member !== undefined && containsMention(nextDraft, member.handle)
     }))
-    if (next.size !== recipients.size) onRecipientsChange(next)
+    if (next.size !== recipients.size) drafts.writeRecipients(draftKey, next)
   }
 
   // Restored drafts may carry recipients that no longer match the text (or
@@ -184,7 +194,8 @@ export function TeamComposer({ members, followerMemberIds, recipients, draft, pe
 
   const onChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     const nextDraft = event.target.value
-    onDraftChange(nextDraft)
+    drafts.writeDraft(draftKey, nextDraft)
+    onEdit?.()
     pruneRecipients(nextDraft)
     updateMention(nextDraft, event.target.selectionStart ?? nextDraft.length)
   }
@@ -192,8 +203,9 @@ export function TeamComposer({ members, followerMemberIds, recipients, draft, pe
   // Both pick kinds share the same commit path: swap the text in, add the
   // recipients, close the menu, and restore the caret after focus.
   const commitMention = (nextDraft: string, nextCaret: number, nextRecipients: ReadonlySet<AgentTeamMemberId>): void => {
-    onDraftChange(nextDraft)
-    onRecipientsChange(nextRecipients)
+    drafts.writeDraft(draftKey, nextDraft)
+    drafts.writeRecipients(draftKey, nextRecipients)
+    onEdit?.()
     setMention(undefined)
     setHighlight(0)
     requestAnimationFrame(() => {

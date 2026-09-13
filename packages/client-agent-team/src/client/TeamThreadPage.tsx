@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
   AgentTeamClientMemberStatus,
   AgentTeamChannelRef,
@@ -67,6 +67,23 @@ function messageFact(message: ReadProjection['anchor'], mentions: readonly Agent
   return { kind: 'message', sequence: message.sequence, message, mentions, occurredAt: message.occurredAt }
 }
 
+/**
+ * A fact owns its mention array, so the rendered name list is cached against
+ * that array. Every roster refresh replaces the handles map with a fresh Map of
+ * identical content, so the cache compares the resolved names rather than the
+ * map identity: identity stays stable while the names are unchanged, which is
+ * what keeps a memoized row from re-rendering on every refresh.
+ */
+const mentionNamesCache = new WeakMap<readonly AgentTeamMemberId[], readonly string[]>()
+
+function stableMentionNames(mentions: readonly AgentTeamMemberId[], handles: ReadonlyMap<AgentTeamMemberId, string>): readonly string[] {
+  const names = mentionNamesOf(mentions, handles)
+  const cached = mentionNamesCache.get(mentions)
+  if (cached !== undefined && cached.length === names.length && cached.every((name, index) => name === names[index])) return cached
+  mentionNamesCache.set(mentions, names)
+  return names
+}
+
 function mergeFacts(...groups: readonly (readonly AgentTeamThreadFact[])[]): readonly AgentTeamThreadFact[] {
   const byKey = new Map<ThreadFactKey, AgentTeamThreadFact>()
   for (const group of groups) for (const fact of group) byKey.set(factKey(fact), fact)
@@ -109,8 +126,9 @@ export function TeamThreadPage(props: TeamThreadPageProps) {
   const [newFactsCount, setNewFactsCount] = useState(0)
   // The reply draft lives in the keyed draft cache: view switches unmount
   // this page, and a refresh must not cost the half-written message either.
+  // The composer owns the subscription — this page only reads a snapshot when
+  // it sends, so typing never re-renders the timeline.
   const draftKey: TeamDraftKey = `thread:${threadRef}`
-  const { draft, recipients } = useSyncExternalStore(drafts.subscribe, () => drafts.getSnapshot(draftKey))
   const [claimsOpen, setClaimsOpen] = useState(false)
   // Early acceptance: the Human may accept while Claims are still open; the
   // confirm dialog lists exactly what will be completed with the Task.
@@ -189,20 +207,60 @@ export function TeamThreadPage(props: TeamThreadPageProps) {
     }
   }
 
-  const refreshSupplemental = async (): Promise<void> => {
+  /** One roster + view read. Answers false once the page is gone. */
+  const applySupplemental = async (): Promise<boolean> => {
     try {
       const [loadedMembers, loadedView] = await Promise.all([
         loadMembers({ workspaceId }),
         loadChannels({ workspaceId, ...(channelRef === undefined ? {} : { channelRef }), threadRef, includeActivities: false, limit: 1 }),
       ])
-      if (!mountedRef.current) return
+      if (!mountedRef.current) return false
       if (loadedMembers.ok) setMembers(loadedMembers.value)
       if (loadedView.ok) setChannelView(loadedView.value)
       const failure = [loadedMembers, loadedView].find(result => !result.ok)
       if (failure !== undefined && !failure.ok) setError(failure.error.message)
+      return true
     } catch (cause) {
       if (mountedRef.current) setError(cause instanceof Error ? cause.message : String(cause))
+      return mountedRef.current
     }
+  }
+
+  // One Host change event wakes every scope it matches: here a workspace commit
+  // and a presence transition, whose separate polls both deliver that event's
+  // version. Both asks are the same roster and view read, so a version a round
+  // has already covered must not fetch again — and a newer version arriving
+  // mid-round runs one trailing round instead of being dropped.
+  const supplementalRef = useRef<Promise<void>>()
+  const supplementalCoveredRef = useRef(0)
+  const supplementalPendingRef = useRef(0)
+  const refreshSupplemental = (version?: number): Promise<void> => {
+    const inFlight = supplementalRef.current
+    if (version !== undefined) {
+      if (version <= supplementalCoveredRef.current) return inFlight ?? Promise.resolve()
+      if (inFlight !== undefined) {
+        supplementalPendingRef.current = Math.max(supplementalPendingRef.current, version)
+        return inFlight
+      }
+      supplementalCoveredRef.current = version
+    } else if (inFlight !== undefined) {
+      return inFlight
+    }
+    const round = (async () => {
+      for (;;) {
+        supplementalPendingRef.current = 0
+        if (!await applySupplemental()) return
+        // A newer change landed while this round fetched: cover it too.
+        const pending = supplementalPendingRef.current
+        if (pending <= supplementalCoveredRef.current) return
+        supplementalCoveredRef.current = pending
+      }
+    })().finally(() => {
+      // A remount may already own a newer round; only this one clears itself.
+      if (supplementalRef.current === round) supplementalRef.current = undefined
+    })
+    supplementalRef.current = round
+    return round
   }
 
   const refreshPassiveFacts = async (): Promise<void> => {
@@ -256,6 +314,10 @@ export function TeamThreadPage(props: TeamThreadPageProps) {
 
   useEffect(() => {
     mountedRef.current = true
+    // The previous mount's supplemental round must not answer for this one.
+    supplementalRef.current = undefined
+    supplementalCoveredRef.current = 0
+    supplementalPendingRef.current = 0
     projectionRef.current = undefined
     setProjection(undefined)
     setChannelView(undefined)
@@ -318,7 +380,7 @@ export function TeamThreadPage(props: TeamThreadPageProps) {
       subscribeChanges({ kind: 'workspace', workspaceId }, update => {
         if (!mountedRef.current) return
         if (update.type === 'failed') { setError(update.message); return }
-        void refreshSupplemental()
+        void refreshSupplemental(update.version)
       }),
       // Presence transitions commit nothing: only the member rows move, so
       // the roster refresh rides the same supplemental fetch as workspace
@@ -326,7 +388,7 @@ export function TeamThreadPage(props: TeamThreadPageProps) {
       subscribeChanges({ kind: 'presence', workspaceId }, update => {
         if (!mountedRef.current) return
         if (update.type === 'failed') { setError(update.message); return }
-        void refreshSupplemental()
+        void refreshSupplemental(update.version)
       }),
     ]
     return () => {
@@ -405,7 +467,8 @@ export function TeamThreadPage(props: TeamThreadPageProps) {
   // Branded-ref navigation for message bodies: channel refs hop to the
   // Channel; the open Task's own refs are already on screen, and other Tasks
   // are not resolvable from this surface, so they degrade to a no-op.
-  const openRef = (ref: string): void => {
+  // Identity-stable: a fresh closure per render would defeat TeamMessage's memo.
+  const openRef = useCallback((ref: string): void => {
     if (ref.startsWith('channel:') && ref !== channelRef) {
       selectChannel(ref as AgentTeamChannelRef)
       return
@@ -426,9 +489,9 @@ export function TeamThreadPage(props: TeamThreadPageProps) {
       // Another Task cited here: resolve its home Channel and jump.
       jumpToTaskThread(resolveTaskRefs, workspaceId, ref as AgentTeamTaskRef, selectThread)
     }
-  }
+  }, [channelRef, threadRef, taskRef, workspaceId, selectChannel, selectThread, loadChannels, resolveTaskRefs])
 
-  const lookupTaskRefs = hostTaskRefLookup(resolveTaskRefs, workspaceId)
+  const lookupTaskRefs = useMemo(() => hostTaskRefLookup(resolveTaskRefs, workspaceId), [resolveTaskRefs, workspaceId])
 
   const renderFact = (fact: AgentTeamThreadFact, grouped = false) => {
     if (fact.kind === 'message') {
@@ -444,7 +507,7 @@ export function TeamThreadPage(props: TeamThreadPageProps) {
         loadAttachment={getAttachment}
         t={t}
         occurredAt={fact.message.occurredAt}
-        mentionNames={mentionNamesOf(fact.mentions, mentionHandlesMap)}
+        mentionNames={stableMentionNames(fact.mentions, mentionHandlesMap)}
         onOpenRef={openRef}
         onResolveTaskRefs={lookupTaskRefs}
         grouped={grouped}
@@ -586,7 +649,20 @@ export function TeamThreadPage(props: TeamThreadPageProps) {
     }
   }
 
+  // Editing the draft invalidates one-shot send state: a confirmation token,
+  // the retained requestId, and the status line. Every setter returns the same
+  // state when there is nothing to clear, so a keystroke does not re-render the
+  // timeline now that the composer owns the draft.
+  const clearSendState = useCallback((): void => {
+    setConfirmation(current => current === undefined ? current : undefined)
+    setReplyRequestId(current => current === undefined ? current : undefined)
+    setStatusMessage(current => current === undefined ? current : undefined)
+  }, [])
+
   const sendReply = async (): Promise<void> => {
+    // Read the draft at send time: this page no longer subscribes to it, so a
+    // captured render value would be stale after the composer's own edits.
+    const { draft, recipients } = drafts.getSnapshot(draftKey)
     if (pending || thread === undefined || draft.trim() === '') return
     const id = replyRequestId ?? mintRequestId()
     setReplyRequestId(id)
@@ -769,13 +845,12 @@ export function TeamThreadPage(props: TeamThreadPageProps) {
       key={draftKey}
       members={channelMembers}
       followerMemberIds={followerIds}
-      recipients={recipients}
-      draft={draft}
+      drafts={drafts}
+      draftKey={draftKey}
       pending={pending}
       {...(statusMessage === undefined ? {} : { confirmation: statusMessage })}
       {...(error === undefined ? {} : { error })}
-      onDraftChange={next => { drafts.writeDraft(draftKey, next); setConfirmation(undefined); setReplyRequestId(undefined); setStatusMessage(undefined) }}
-      onRecipientsChange={next => { drafts.writeRecipients(draftKey, next); setConfirmation(undefined); setReplyRequestId(undefined); setStatusMessage(undefined) }}
+      onEdit={clearSendState}
       onSubmit={() => { void sendReply() }}
       placeholder={t('replyPlaceholder')}
       pendingFiles={pendingFiles}

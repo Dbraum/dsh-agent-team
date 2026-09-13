@@ -278,6 +278,36 @@ const releaseSnapshotFields = {
   inbox: inboxDeltaSchema,
 }
 
+/** The receipt form every new read writes: the progress it made and the Inbox delta it consumed. */
+const threadReadReceiptDataSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  memberId: memberIdSchema,
+  threadRef: threadRefSchema,
+  taskRef: taskRefSchema.optional(),
+  readThroughSequence: z.number().int().nonnegative(),
+  inbox: inboxDeltaSchema,
+}).strict().transform(omitUndefined)
+
+/**
+ * The pre-receipt Thread-read snapshot. Still accepted so a ledger written
+ * before the receipt form keeps opening; both shapes are strict, so a stored
+ * record parses as exactly one of them.
+ */
+const threadReadSnapshotDataSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  memberId: memberIdSchema,
+  task: taskSchema.optional(),
+  thread: threadSchema,
+  claims: z.array(claimSchema),
+  anchor: messageSchema,
+  anchorMentions: z.array(memberIdSchema),
+  facts: z.array(readFactSchema),
+  readThroughSequence: z.number().int().nonnegative(),
+  remainingUnreadCount: z.number().int().nonnegative(),
+  attention: attentionSchema.optional(),
+  inbox: inboxDeltaSchema,
+}).strict().transform(omitUndefined)
+
 /** Closed Agent Team operation union before occurrence stamping. */
 const storedAgentTeamOperationSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -469,20 +499,7 @@ const storedAgentTeamOperationSchema = z.discriminatedUnion('kind', [
     ...operationBase,
     previousOperationId: operationIdSchema.nullable(),
     kind: z.literal('team/thread-read'),
-    data: z.object({
-      workspaceId: workspaceIdSchema,
-      memberId: memberIdSchema,
-      task: taskSchema.optional(),
-      thread: threadSchema,
-      claims: z.array(claimSchema),
-      anchor: messageSchema,
-      anchorMentions: z.array(memberIdSchema),
-      facts: z.array(readFactSchema),
-      readThroughSequence: z.number().int().nonnegative(),
-      remainingUnreadCount: z.number().int().nonnegative(),
-      attention: attentionSchema.optional(),
-      inbox: inboxDeltaSchema,
-    }).strict().transform(omitUndefined),
+    data: z.union([threadReadReceiptDataSchema, threadReadSnapshotDataSchema]),
   }).strict(),
   z.object({
     ...operationBase,

@@ -301,8 +301,12 @@ const teamThread = defineTool({
       const facts = value.facts as FactView[]
       const acknowledged = facts.filter(fact => fact.unread === true).length
       const remaining = value.remainingUnreadCount ?? 0
+      // A read with nothing unread writes no durable operation, so the opening
+      // line claims a commit only when unread facts were actually acknowledged.
       const lines = [
-        `Read committed — ${acknowledged === 0 ? `no unread updates on ${value.threadRef}; nothing remains` : `acknowledged ${acknowledged} unread update(s) on ${value.threadRef}; ${remaining} remain`}.`,
+        acknowledged === 0
+          ? `Read — no unread updates on ${value.threadRef}; nothing remains.`
+          : `Read committed — acknowledged ${acknowledged} unread update(s) on ${value.threadRef}; ${remaining} remain.`,
         `${value.threadRef}${standing === '' ? '' : ` · ${standing}`} · ${value.following ? 'following' : 'not following'}`,
       ]
       // Orientation: A the anchor is one of the returned facts (renders as

@@ -6,10 +6,11 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import AgentTeam from '../src/index.ts'
-import { agentTeamHumanActor, AgentTeamLedger } from '../src/ledger.ts'
+import { agentTeamHumanActor, AgentTeamLedger, isThreadReadSnapshot } from '../src/ledger.ts'
 import { formatTeamTimestamp } from '../src/time-format.ts'
 import { agentTeamDomainSpec } from '../src/spec.ts'
 import { MemoryMediaPool, MemoryStorageBackend } from './helpers/memory-backend.ts'
+import { snapshotReadData } from './helpers/legacy-thread-read.ts'
 import type {
   AgentTeamAgentMember,
   AgentTeamMemberActor,
@@ -17,6 +18,7 @@ import type {
   AgentTeamOperationId,
   AgentTeamRequestId,
   AgentTeamTask,
+  AgentTeamThreadReadResult,
 } from '../src/types.ts'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 
@@ -103,7 +105,7 @@ async function addLedgerMember(
   return { member, actor: { kind: 'member', memberId: member.memberId, handle: member.handle } }
 }
 
-async function seededThread(): Promise<{ readonly test: TeamHarness; readonly ledger: AgentTeamLedger; readonly actor: AgentTeamMemberActor; readonly taskRef: AgentTeamTask['taskRef'] }> {
+async function seededThread(): Promise<{ readonly test: TeamHarness; readonly ledger: AgentTeamLedger; readonly actor: AgentTeamMemberActor; readonly taskRef: AgentTeamTask['taskRef']; readonly humanRead: AgentTeamThreadReadResult }> {
   const test = await harness()
   const channel = await test.ctx.agentTeam.createChannel({ requestId: requestId('channel'), workspaceId: alpha, name: 'engineering', description: 'Engineering work' })
   const started = withTask(committed(await test.ctx.agentTeam.sendMessage({ asTask: true, requestId: requestId('start'), workspaceId: alpha, channelRef: channel.channel.channelRef, body: 'Implement member time awareness' })))
@@ -120,7 +122,7 @@ async function seededThread(): Promise<{ readonly test: TeamHarness; readonly le
   // read also supplies the fresh baseRevision the reply needs.
   const humanRead = (await ledger.readThread({ requestId: requestId('human-read'), workspaceId: alpha, taskRef, actor: agentTeamHumanActor() })).value
   committed((await ledger.reply({ requestId: requestId('reply'), workspaceId: alpha, taskRef, body: 'First reply', baseRevision: humanRead.readThroughSequence, actor: agentTeamHumanActor() })).value)
-  return { test, ledger, actor, taskRef }
+  return { test, ledger, actor, taskRef, humanRead }
 }
 
 describe('fact envelope instants project from the committing operation', () => {
@@ -192,17 +194,24 @@ describe('the cache invariant: one fact, one instant, on every reread path', () 
   })
 
   it('pre-envelope ledgers normalize activity instants from the committing operation on replay', async () => {
-    const { test, ledger, actor, taskRef } = await seededThread()
+    const { test, ledger, actor, taskRef, humanRead } = await seededThread()
     const read = (await ledger.readThread({ requestId: requestId('read'), workspaceId: alpha, taskRef, actor })).value
     const storedInstants = new Map(read.facts.map(entry => [entry.fact.sequence, entry.fact.occurredAt]))
+    // Each read answered with the picture of its own moment, so a stored
+    // snapshot can only be rebuilt from the picture of the read that wrote it.
+    const pictures = new Map<AgentTeamRequestId, Omit<AgentTeamThreadReadResult, 'receipt'>>([
+      [requestId('human-read'), humanRead],
+      [requestId('read'), read],
+    ])
     // Strip every envelope instant from every thread-read record, exactly as
     // a pre-occurredAt ledger would store them; the read results themselves
     // are durable records and the replay must rebuild identical instants.
     const records = [...test.facility.get('agent_team')!.table('operations').entries()].map(([id, operation]) => {
       const typed = operation as AgentTeamOperation
-      if (typed.kind !== 'team/thread-read') return [id, typed] as [string, unknown]
-      const facts = typed.data.facts.map(entry => ({ ...entry, fact: { ...entry.fact, occurredAt: undefined } }))
-      return [id, { ...typed, data: { ...typed.data, facts } }] as [string, unknown]
+      if (typed.kind !== 'team/thread-read' || isThreadReadSnapshot(typed.data)) return [id, typed] as [string, unknown]
+      const data = snapshotReadData(typed.data, pictures.get(typed.requestId)!)
+      const facts = data.facts.map(entry => ({ ...entry, fact: { ...entry.fact, occurredAt: undefined } }))
+      return [id, { ...typed, data: { ...data, facts } }] as [string, unknown]
     })
     const pool = new MemoryMediaPool()
     pool.versions.set('agent_team', agentTeamDomainSpec.version)

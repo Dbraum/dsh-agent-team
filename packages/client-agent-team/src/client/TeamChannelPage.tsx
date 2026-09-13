@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import type { AgentTeamClientMemberStatus, AgentTeamChannelRef, AgentTeamMemberId, AgentTeamSendMessageRequest, AgentTeamView, AgentTeamViewItem,
   AgentTeamTaskRef, AgentTeamThreadRef,
 } from '@wowyuarm/dsh-agent-team/types'
@@ -70,8 +70,9 @@ export function TeamChannelPage({ workspaceId, channelRef, loadChannels, subscri
   const [managingMembers, setManagingMembers] = useState(false)
   // The composer draft lives in the keyed draft cache: view switches unmount
   // this page, and a refresh must not cost the half-written message either.
+  // The composer owns the subscription — this page only reads a snapshot when
+  // it sends, so typing never re-renders the timeline.
   const draftKey: TeamDraftKey = `channel:${channelRef}`
-  const { draft, recipients } = useSyncExternalStore(drafts.subscribe, () => drafts.getSnapshot(draftKey))
   const manageTriggerRef = useRef<HTMLSpanElement>(null)
   const memberListRef = useRef<HTMLDivElement>(null)
   const mountedRef = useRef(false)
@@ -239,7 +240,17 @@ export function TeamChannelPage({ workspaceId, channelRef, loadChannels, subscri
   // definitive outcomes (committed or rejected) start the next send fresh.
   const pendingSendId = useRef<AgentTeamSendMessageRequest['requestId']>()
 
+  // Editing the draft invalidates the one-shot status line. The setter returns
+  // the same state when there is nothing to clear, so a keystroke does not
+  // re-render the timeline now that the composer owns the draft.
+  const clearSendState = useCallback((): void => {
+    setStatusMessage(current => current === undefined ? current : undefined)
+  }, [])
+
   const send = async () => {
+    // Read the draft at send time: this page no longer subscribes to it, so a
+    // captured render value would be stale after the composer's own edits.
+    const { draft, recipients } = drafts.getSnapshot(draftKey)
     if (pending || draft.trim() === '') return
     const recipientIds = [...recipients].sort()
     const requestId = pendingSendId.current ?? mintRequestId()
@@ -380,13 +391,12 @@ export function TeamChannelPage({ workspaceId, channelRef, loadChannels, subscri
     {channel !== undefined ? <TeamComposer
       key={draftKey}
       members={channelMembers}
-      recipients={recipients}
-      draft={draft}
+      drafts={drafts}
+      draftKey={draftKey}
       pending={pending}
       {...(statusMessage === undefined ? {} : { confirmation: statusMessage })}
       {...(error === undefined ? {} : { error })}
-      onDraftChange={next => { drafts.writeDraft(draftKey, next); setStatusMessage(undefined) }}
-      onRecipientsChange={next => { drafts.writeRecipients(draftKey, next); setStatusMessage(undefined) }}
+      onEdit={clearSendState}
       onSubmit={() => { void send() }}
       pendingFiles={pendingFiles}
       onFilesChange={setPendingFiles}

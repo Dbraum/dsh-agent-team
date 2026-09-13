@@ -98,9 +98,12 @@ import type {
   AgentTeamThreadHistory,
   AgentTeamThreadHistoryRequest,
   AgentTeamThreadReadFact,
+  AgentTeamThreadReadData,
   AgentTeamThreadReadOperation,
+  AgentTeamThreadReadReceipt,
   AgentTeamThreadReadRequest,
   AgentTeamThreadReadResult,
+  AgentTeamThreadReadSnapshot,
   AgentTeamThreadObservations,
   AgentTeamThreadObservationsRequest,
   AgentTeamThreadRef,
@@ -269,6 +272,16 @@ export interface AgentTeamLedgerResult<T> {
   readonly committed: boolean
 }
 
+/**
+ * Outcome of one Thread read. A read that committed always carries the receipt
+ * of the operation it wrote; a read that committed nothing — an already-read
+ * Thread — answers with the current picture instead, and only a retry of a
+ * read that did commit still carries that original receipt.
+ */
+export type AgentTeamThreadReadOutcome =
+  | { readonly value: AgentTeamThreadReadResult & { readonly receipt: AgentTeamOperationReceipt }; readonly committed: true }
+  | { readonly value: AgentTeamThreadReadResult; readonly committed: false }
+
 interface AgentTeamDurableMemberResult {
   readonly receipt: AgentTeamOperationReceipt
   readonly member: AgentTeamAgentMember
@@ -289,18 +302,29 @@ interface Confirmation {
   readonly memberStates: readonly AgentTeamAgentMember['state'][]
 }
 
-interface PreparedRead {
+/**
+ * Everything one Thread read durably claims, plus the projection state the
+ * picture derivation needs. `unread` and `attentionBefore` are derivation
+ * inputs, not durable content: the receipt written to the ledger is the
+ * watermark, the Inbox delta and the Thread they belong to.
+ */
+interface PreparedReadReceipt {
   readonly task?: AgentTeamTask | undefined
   readonly thread: AgentTeamThread
+  readonly unread: readonly AgentTeamThreadReadFact[]
+  readonly attentionBefore?: AgentTeamThreadAttention | undefined
+  readonly readThroughSequence: number
+  readonly attention?: AgentTeamThreadAttention | undefined
+  readonly consumedDirectMarkers: readonly AgentTeamDirectMarker[]
+  readonly inbox: AgentTeamInboxDelta
+}
+
+interface PreparedRead extends PreparedReadReceipt {
   readonly claims: readonly AgentTeamClaim[]
   readonly anchor: AgentTeamMessage
   readonly anchorMentions: readonly AgentTeamMemberId[]
   readonly facts: readonly AgentTeamThreadReadFact[]
-  readonly readThroughSequence: number
   readonly remainingUnreadCount: number
-  readonly attention?: AgentTeamThreadAttention
-  readonly consumedDirectMarkers: readonly AgentTeamDirectMarker[]
-  readonly inbox: AgentTeamInboxDelta
 }
 
 interface Projection {
@@ -311,7 +335,6 @@ interface Projection {
   readonly members: Map<AgentTeamMemberId, AgentTeamAgentMember>
   readonly memberships: Map<AgentTeamChannelRef, Set<AgentTeamMemberId>>
   readonly claims: Map<AgentTeamClaimRef, AgentTeamClaim>
-  readonly messages: AgentTeamMessage[]
   readonly tasks: Map<AgentTeamTaskRef, AgentTeamTask>
   readonly threads: Map<AgentTeamThreadRef, AgentTeamThread>
   readonly attention: Map<string, AgentTeamThreadAttention>
@@ -325,6 +348,8 @@ interface Projection {
   /** Structured mention refs per Message, derived from the originating send operations. */
   readonly mentionsByMessage: Map<AgentTeamMessageRef, readonly AgentTeamMemberId[]>
   readonly messageCountByThread: Map<AgentTeamThreadRef, number>
+  /** Ref index over the Message facts, written by `appendMessageFact` alone. */
+  readonly messagesByRef: Map<AgentTeamMessageRef, AgentTeamMessage>
   readonly attentionByThread: Map<AgentTeamThreadRef, Set<AgentTeamMemberId>>
   /** Latest retired Session id per Member, from the most recent renewal or rollover record. */
   readonly previousSessions: Map<AgentTeamMemberId, SessionId>
@@ -354,8 +379,9 @@ interface AgentTeamAttentionObservation {
 
 function emptyProjection(): Projection {
   return { byRequest: new Map(), byOperation: new Map(), ordered: [], channels: new Map(), members: new Map(), memberships: new Map(),
-    claims: new Map(), messages: [], tasks: new Map(), threads: new Map(), attention: new Map(), directMarkers: new Map(), activityMarkers: new Map(),
+    claims: new Map(), tasks: new Map(), threads: new Map(), attention: new Map(), directMarkers: new Map(), activityMarkers: new Map(),
     orderedFacts: [], factsByThread: new Map(), channelRefByThread: new Map(), mentionsByMessage: new Map(), messageCountByThread: new Map(),
+    messagesByRef: new Map(),
     attentionByThread: new Map(), previousSessions: new Map(), rolloverSeeds: new Map(),
     anchorByThread: new Map(), taskNumberByTask: new Map(), taskCountByChannel: new Map(), attentionThreadsByMember: new Map(),
     directMarkersByMember: new Map(), activityMarkersByMember: new Map(), observationsByThread: new Map() }
@@ -382,6 +408,33 @@ function boundedInboxPreview(body: string): string {
   return firstLine.length > 120 ? `${firstLine.slice(0, 119)}…` : firstLine
 }
 
+/**
+ * Whether one operation's Inbox delta would change nothing. A read that finds
+ * no unread fact for its reader and no marker to consume produces exactly this
+ * delta, which is why such a read is a no-op rather than a durable operation.
+ */
+function isEmptyInboxDelta(delta: AgentTeamInboxDelta): boolean {
+  return delta.attention.set.length === 0 && delta.attention.removed.length === 0
+    && delta.directMarkers.added.length === 0 && delta.directMarkers.removed.length === 0
+    && delta.activityMarkers.added.length === 0 && delta.activityMarkers.removed.length === 0
+}
+
+/**
+ * Which of the two durable Thread-read forms one record holds. Both schemas are
+ * strict and structurally disjoint — only the pre-receipt snapshot carries the
+ * Thread picture — so `thread` decides it for every stored record.
+ */
+export function isThreadReadSnapshot(data: AgentTeamThreadReadData): data is AgentTeamThreadReadSnapshot {
+  return 'thread' in data
+}
+
+/** The Thread and optional Task one read targeted, whichever form the record holds. */
+export function threadReadTargetOf(data: AgentTeamThreadReadData): { readonly threadRef: AgentTeamThreadRef; readonly taskRef?: AgentTeamTaskRef | undefined } {
+  return isThreadReadSnapshot(data)
+    ? { threadRef: data.thread.threadRef, ...(data.task === undefined ? {} : { taskRef: data.task.taskRef }) }
+    : { threadRef: data.threadRef, ...(data.taskRef === undefined ? {} : { taskRef: data.taskRef }) }
+}
+
 /** Deep-freeze a Member capability overlay; absent stays absent. */
 function freezeCapabilities(capabilities: AgentTeamMemberCapabilities | undefined): { capabilities?: AgentTeamMemberCapabilities } {
   if (capabilities === undefined) return {}
@@ -405,6 +458,23 @@ export class AgentTeamLedger {
   private readonly createOccurredAt: () => string
   private readonly createRef: (kind: 'channel' | 'message' | 'task' | 'thread' | 'claim' | 'activity') => string
   private operationTail: Promise<void> = Promise.resolve()
+  /**
+   * Head of the durable records the constructor's record-level replay
+   * validated, adoptable once by the invariant mount. See `validateAtMount`.
+   */
+  private bootValidation: { readonly records: number; readonly lastSequence: number; readonly lastOperationId: AgentTeamOperationId | null } | undefined
+  /**
+   * Sequence of the newest committed record that invalidated the shared
+   * projection — the durable position the Client's change cursors compare
+   * against, rebuilt by replay like every other index.
+   *
+   * Records whose commit is private read progress or audit-only
+   * (`changeScopesOf` derives no scope for them) never move it, so one
+   * Member's Thread read cannot make a parked Client believe that something it
+   * watches changed. Being a ledger position rather than a process counter, it
+   * also stays monotone across a restart.
+   */
+  private projectionVersion = 0
 
   constructor(
     private readonly table: KvTable<AgentTeamOperationId, AgentTeamOperation>,
@@ -414,6 +484,12 @@ export class AgentTeamLedger {
     this.createOccurredAt = options.occurredAt ?? (() => new Date().toISOString())
     this.createRef = options.ref ?? (kind => `${kind}:${randomUUID()}`)
     this.replay()
+    const head = this.state.ordered.at(-1)
+    this.bootValidation = Object.freeze({
+      records: this.state.ordered.length,
+      lastSequence: head?.sequence ?? 0,
+      lastOperationId: head?.operationId ?? null,
+    })
   }
 
   initialize(request: AgentTeamInitializeRequest = {
@@ -1418,27 +1494,35 @@ export class AgentTeamLedger {
       facts: this.unreadFor(memberId, item.thread.threadRef) })))
   }
 
-  readThread(request: AgentTeamAuthorizedThreadReadRequest): Promise<AgentTeamLedgerResult<AgentTeamThreadReadResult>> {
+  readThread(request: AgentTeamAuthorizedThreadReadRequest): Promise<AgentTeamThreadReadOutcome> {
     return this.enqueue(async () => {
       const existing = this.state.byRequest.get(request.requestId)
       if (existing !== undefined) {
         this.assertSameThreadRead(existing, request)
-        return this.resolved(this.threadReadResult(existing))
+        // A retry reports the original receipt with the picture the current
+        // projection derives, and never advances a watermark a second time.
+        const current = this.prepareRead(existing.data.memberId, existing.data.workspaceId, request)
+        return Object.freeze({ value: Object.freeze({ receipt: this.receipt(existing), ...this.readPicture(current) }), committed: false })
       }
       const actor = this.assertActorForWorkspace(request.actor, request.workspaceId)
       const prepared = this.prepareRead(actor.memberId, request.workspaceId, request)
+      // A read whose Inbox delta is empty writes nothing: the watermark does
+      // not advance and no marker is consumed. It answers with the same picture
+      // and no receipt, so the caller learns "no operation" from the result's
+      // committed flag, never from a sequence this read did not write.
+      if (isEmptyInboxDelta(prepared.inbox)) return Object.freeze({ value: this.readPicture(prepared), committed: false })
+      // The record carries progress, not the picture: the Thread, its facts,
+      // the anchor and the reader's Attention are projection state every replay
+      // already holds.
+      const data: AgentTeamThreadReadReceipt = Object.freeze({ workspaceId: request.workspaceId, memberId: actor.memberId,
+        threadRef: prepared.thread.threadRef, ...(prepared.task === undefined ? {} : { taskRef: prepared.task.taskRef }),
+        readThroughSequence: prepared.readThroughSequence, inbox: prepared.inbox })
       const operation: AgentTeamThreadReadOperation = Object.freeze({
-        ...this.operationBase(request, this.nextSequence()), kind: 'team/thread-read',
-        data: Object.freeze({ workspaceId: request.workspaceId, memberId: actor.memberId,
-          ...(prepared.task === undefined ? {} : { task: prepared.task }),
-          thread: prepared.thread, claims: prepared.claims, anchor: prepared.anchor, anchorMentions: prepared.anchorMentions,
-          facts: prepared.facts,
-          readThroughSequence: prepared.readThroughSequence, remainingUnreadCount: prepared.remainingUnreadCount,
-          ...(prepared.attention === undefined ? {} : { attention: prepared.attention }), inbox: prepared.inbox }),
+        ...this.operationBase(request, this.nextSequence()), kind: 'team/thread-read', data,
       })
       await this.table.put(operation.operationId, operation)
       this.apply(operation)
-      return this.committed(this.threadReadResult(operation))
+      return Object.freeze({ value: Object.freeze({ receipt: this.receipt(operation), ...this.readPicture(prepared) }), committed: true })
     })
   }
 
@@ -1627,6 +1711,31 @@ export class AgentTeamLedger {
     this.validateRecords(this.sortedRecords())
   }
 
+  /**
+   * Validate the durable ledger for the invariant's mount check, reusing the
+   * constructor's record-level replay once instead of paying a second identical
+   * one at startup.
+   *
+   * The adoption is gated on the operations table's single-writer identity —
+   * this ledger's commit path is the only caller of `table.put` — so an
+   * unchanged record count, head sequence and head operation id mean a
+   * mount-time replay would re-derive precisely the records the constructor
+   * already re-derived against its own scratch projection. Any commit between
+   * construction and mount, and every later call, falls back to the full
+   * replay. The check is never narrowed: the reused conclusion is still that
+   * same independent replay of every durable record.
+   */
+  validateAtMount(): void {
+    const boot = this.bootValidation
+    this.bootValidation = undefined
+    const head = this.state.ordered.at(-1)
+    if (boot !== undefined
+      && boot.records === this.state.ordered.length
+      && boot.lastSequence === (head?.sequence ?? 0)
+      && boot.lastOperationId === (head?.operationId ?? null)) return
+    this.validate()
+  }
+
   hasCommitted(requestId: AgentTeamRequestId): boolean {
     return this.state.byRequest.has(requestId)
   }
@@ -1657,6 +1766,16 @@ export class AgentTeamLedger {
       }
     }
     return scopes
+  }
+
+  /**
+   * Durable position of the newest shared-projection commit: the version every
+   * change waiter outside the presence scope observes. It only moves when a
+   * commit has scopes somebody could refetch (`changeScopesOf`), never for
+   * private read progress or an audit-only record.
+   */
+  projectionSequence(): number {
+    return this.projectionVersion
   }
 
   /** Scopes whose projections one committed operation invalidates; undefined wakes every waiter. */
@@ -2002,18 +2121,34 @@ export class AgentTeamLedger {
     }
     if (operation.kind === 'team/thread-read') {
       if (operation.actor.kind === 'member') assertMember(); else assertHuman()
-      if (operation.data.memberId !== operation.actor.memberId) throw new Error('Thread read has wrong actor')
-      const expected = this.prepareReadFrom(projection, operation.data.memberId, operation.data.workspaceId, {
-        threadRef: operation.data.thread.threadRef,
-        ...(operation.data.task === undefined ? {} : { taskRef: operation.data.task.taskRef }),
-      })
-      const expectedData = Object.freeze({ workspaceId: operation.data.workspaceId, memberId: operation.data.memberId,
-        ...(expected.task === undefined ? {} : { task: expected.task }), thread: expected.thread, claims: expected.claims, anchor: expected.anchor,
-        anchorMentions: expected.anchorMentions, facts: expected.facts,
-        readThroughSequence: expected.readThroughSequence, remainingUnreadCount: expected.remainingUnreadCount,
-        ...(expected.attention === undefined ? {} : { attention: expected.attention }), inbox: expected.inbox })
-      if (!isDeepStrictEqual(operation.data, expectedData)) throw new Error('invalid Thread read projection')
-      this.validateInboxDelta(operation.data.inbox, projection, refs)
+      const data = operation.data
+      if (data.memberId !== operation.actor.memberId) throw new Error('Thread read has wrong actor')
+      const target = threadReadTargetOf(data)
+      if (isThreadReadSnapshot(data)) {
+        // The pre-receipt form froze the whole picture, so its expected value
+        // is re-derived the same way it was written: from this record's prior
+        // projection only, never from the live one.
+        const expected = this.prepareReadFrom(projection, data.memberId, data.workspaceId, target)
+        const expectedData = Object.freeze({ workspaceId: data.workspaceId, memberId: data.memberId,
+          ...(expected.task === undefined ? {} : { task: expected.task }), thread: expected.thread, claims: expected.claims, anchor: expected.anchor,
+          anchorMentions: expected.anchorMentions, facts: expected.facts,
+          readThroughSequence: expected.readThroughSequence, remainingUnreadCount: expected.remainingUnreadCount,
+          ...(expected.attention === undefined ? {} : { attention: expected.attention }), inbox: expected.inbox })
+        if (!isDeepStrictEqual(data, expectedData)) throw new Error('invalid Thread read projection')
+      } else {
+        // A receipt claims progress and its Inbox delta, nothing else, so the
+        // independent derivation stops there too: the picture and the unread
+        // count left behind are projection state a replay re-derives for the
+        // surfaces that need them, not content of this record. The Task ref is
+        // derived rather than copied back, so a Task Thread read cannot drop
+        // the Task it belongs to and shrink its own claim unchecked.
+        const expected = this.prepareReadReceiptFrom(projection, data.memberId, data.workspaceId, target)
+        const expectedData = Object.freeze({ workspaceId: data.workspaceId, memberId: data.memberId, threadRef: data.threadRef,
+          ...(expected.task === undefined ? {} : { taskRef: expected.task.taskRef }),
+          readThroughSequence: expected.readThroughSequence, inbox: expected.inbox })
+        if (!isDeepStrictEqual(data, expectedData)) throw new Error('invalid Thread read receipt')
+      }
+      this.validateInboxDelta(data.inbox, projection, refs)
       return
     }
     if (operation.kind === 'team/thread-promoted') {
@@ -2175,6 +2310,19 @@ export class AgentTeamLedger {
     assertUnhandledKind(operation)
   }
 
+  /**
+   * Validation of one operation's Inbox delta against the projection it was
+   * derived from.
+   *
+   * Direct marker references resolve through the replay-derived Message index:
+   * this runs once per inbox-carrying record, so a rescan of the Message list
+   * here would make every record cost the whole ledger. The index is written by
+   * the same fact appends that build `factsByThread`, so a lookup sees exactly
+   * the records replayed before this one and can never reach a Message that
+   * arrives later — which is why the operation's own entity, not yet in the
+   * projection, needs the `additional*` fallbacks. The commit path resolved the
+   * projection first and then its own record, and that precedence is kept.
+   */
   private validateInboxDelta(
     delta: AgentTeamInboxDelta,
     projection: Projection,
@@ -2184,9 +2332,8 @@ export class AgentTeamLedger {
     additionalActivities: readonly AgentTeamActivity[] = [],
   ): void {
     const attentionKeys = new Set<string>()
-    const knownThreadRefs = new Set([...projection.threads.keys(), ...additionalThreadRefs])
     for (const attention of delta.attention.set) {
-      if (!knownThreadRefs.has(attention.threadRef) || attention.startSequence < 1
+      if ((!projection.threads.has(attention.threadRef) && !additionalThreadRefs.includes(attention.threadRef)) || attention.startSequence < 1
         || attention.readThroughSequence < attention.startSequence - 1) {
         throw new Error('invalid Attention delta')
       }
@@ -2198,12 +2345,11 @@ export class AgentTeamLedger {
       if (attentionKeys.has(this.attentionKey(key.memberId, key.threadRef))) throw new Error('conflicting Attention delta')
     }
     const markerKeys = new Set<string>()
-    const messages = [...projection.messages, ...additionalMessages]
     for (const marker of delta.directMarkers.added) {
       const key = this.directMarkerKey(marker)
       if (markerKeys.has(key) || projection.directMarkers.has(key)) throw new Error('invalid direct marker addition')
       markerKeys.add(key)
-      const message = messages.find(candidate => candidate.messageRef === marker.messageRef)
+      const message = projection.messagesByRef.get(marker.messageRef) ?? additionalMessages.find(candidate => candidate.messageRef === marker.messageRef)
       if (message === undefined || message.threadRef !== marker.threadRef || message.sequence !== marker.sequence
         || !this.validMentionTarget(projection, message.channelRef, marker.memberId)) throw new Error('invalid direct marker addition')
     }
@@ -2212,17 +2358,20 @@ export class AgentTeamLedger {
       if (markerKeys.has(key) || !projection.directMarkers.has(key)) throw new Error('invalid direct marker removal')
       markerKeys.add(key)
       const current = projection.directMarkers.get(key)!
-      const message = messages.find(candidate => candidate.messageRef === marker.messageRef)
+      const message = projection.messagesByRef.get(marker.messageRef) ?? additionalMessages.find(candidate => candidate.messageRef === marker.messageRef)
       if (!isDeepStrictEqual(current, marker) || message === undefined || message.threadRef !== marker.threadRef
         || message.sequence !== marker.sequence || !this.validMentionTarget(projection, message.channelRef, marker.memberId)) {
         throw new Error('invalid direct marker removal')
       }
     }
     const activityMarkerKeys = new Set<string>()
-    const activities = [...projection.orderedFacts.filter(fact => fact.kind === 'activity').map(fact => fact.activity), ...additionalActivities]
     for (const marker of delta.activityMarkers.added) {
       const key = this.activityMarkerKey(marker)
-      const activity = activities.find(candidate => candidate.activityRef === marker.activityRef)
+      // Every activity marker is minted for the activity the same record
+      // carries (promotion, close, reopen, acceptance), and a removal never
+      // looks an activity up, so this record's own list is the whole
+      // resolution space: scanning recorded activities would add nothing.
+      const activity = additionalActivities.find(candidate => candidate.activityRef === marker.activityRef)
       if (activityMarkerKeys.has(key) || projection.activityMarkers.has(key) || activity === undefined
         || activity.threadRef !== marker.threadRef || activity.sequence !== marker.sequence) throw new Error('invalid activity marker addition')
       activityMarkerKeys.add(key)
@@ -2359,6 +2508,11 @@ export class AgentTeamLedger {
 
   private apply(operation: AgentTeamOperation): void {
     this.applyTo(this.state, operation)
+    // Live apply only: the record-validation replay re-derives each record
+    // against its own scratch projection, so a scope derivation there would be
+    // discarded.
+    const scopes = this.changeScopesOf(operation)
+    if (scopes === undefined || scopes.length !== 0) this.projectionVersion = operation.sequence
   }
 
   private applyTo(target: Projection, operation: AgentTeamOperation): void {
@@ -2462,7 +2616,6 @@ export class AgentTeamLedger {
     }
     if (operation.kind === 'team/message-sent' || operation.kind === 'team/thread-replied') {
       const { message, mentions } = operation.data
-      target.messages.push(message)
       target.mentionsByMessage.set(message.messageRef, Object.freeze([...mentions]))
       this.appendMessageFact(target, message, mentions, message.occurredAt ?? operation.occurredAt)
       if (operation.data.task !== undefined) target.tasks.set(operation.data.task.taskRef, operation.data.task)
@@ -2540,7 +2693,7 @@ export class AgentTeamLedger {
 
   /** Facts arrive in ledger sequence order, so global and per-thread lists stay sorted by append only. */
   private appendMessageFact(
-    target: Pick<Projection, 'orderedFacts' | 'factsByThread' | 'messageCountByThread'>,
+    target: Pick<Projection, 'orderedFacts' | 'factsByThread' | 'messageCountByThread' | 'messagesByRef'>,
     message: AgentTeamMessage,
     mentions: readonly AgentTeamMemberId[],
     occurredAt: string,
@@ -2551,6 +2704,9 @@ export class AgentTeamLedger {
     facts.push(fact)
     target.factsByThread.set(message.threadRef, facts)
     target.messageCountByThread.set(message.threadRef, (target.messageCountByThread.get(message.threadRef) ?? 0) + 1)
+    // The ref index is written in this same step, so it is exactly the set of
+    // replayed Messages: a validator lookup can never reach a later record.
+    target.messagesByRef.set(message.messageRef, message)
   }
 
   private appendActivityFact(target: Pick<Projection, 'orderedFacts' | 'factsByThread'>, activity: AgentTeamActivity, occurredAt: string): void {
@@ -2678,8 +2834,15 @@ export class AgentTeamLedger {
     return this.prepareReadFrom(this.state, memberId, workspaceId, request)
   }
 
-  /** Derive the only legal durable result of one Thread read from a prior projection. */
-  private prepareReadFrom(projection: Projection, memberId: AgentTeamMemberId, workspaceId: WorkspaceId, request: { threadRef?: AgentTeamThreadRef | undefined; taskRef?: AgentTeamTaskRef | undefined }): PreparedRead {
+  /**
+   * Derive the durable receipt of one Thread read from a prior projection: the
+   * Thread it targeted, the watermark it reaches, the Attention row it writes
+   * and the Inbox delta it consumes. This is the whole durable content of a
+   * receipt-shaped read and the only thing `validateRecords` re-derives for
+   * one; the picture derivation below builds on the same result, so the two can
+   * never drift.
+   */
+  private prepareReadReceiptFrom(projection: Projection, memberId: AgentTeamMemberId, workspaceId: WorkspaceId, request: { threadRef?: AgentTeamThreadRef | undefined; taskRef?: AgentTeamTaskRef | undefined }): PreparedReadReceipt {
     const { task, thread, channelRef } = this.threadContextFrom(projection, workspaceId, request)
     if (memberId !== AGENT_TEAM_HUMAN_MEMBER_ID) {
       const member = projection.members.get(memberId)
@@ -2687,21 +2850,9 @@ export class AgentTeamLedger {
         throw new Error(`Agent Member '${memberId}' is not authorized for Channel '${channelRef}'`)
       }
     }
-    const anchor = this.threadAnchorFrom(projection, thread.threadRef)
     const attention = this.attentionForFrom(projection, memberId, thread.threadRef)
     const unread = this.unreadForFrom(projection, memberId, thread.threadRef)
     const unreadFacts = unread.slice(0, 20)
-    const unreadFactKeys = new Set(unread.map(item => this.threadFactKey(item.fact)))
-    const firstRead = attention !== undefined && attention.readThroughSequence < attention.startSequence
-    const background = firstRead
-      ? projection.messages.filter(message => message.threadRef === thread.threadRef && message.sequence < attention.startSequence)
-        .map(message => Object.freeze({ kind: 'message' as const, sequence: message.sequence, message,
-          mentions: projection.mentionsByMessage.get(message.messageRef) ?? [],
-          occurredAt: this.occurredAtForFactFrom(projection, message.sequence, message.occurredAt) }))
-        .filter(fact => !unreadFactKeys.has(this.threadFactKey(fact))).slice(-12)
-      : []
-    const combined = [...background.map(fact => this.readFactFrom(projection, memberId, fact, false)), ...unreadFacts]
-      .sort((left, right) => left.fact.sequence - right.fact.sequence)
     // Direct markers are sparse acknowledgements, not part of the contiguous
     // follower watermark. Consuming an old marker after a later follow must
     // never move that watermark backwards.
@@ -2717,29 +2868,36 @@ export class AgentTeamLedger {
     const activityMarkers = this.activityMarkersForFrom(projection, memberId, thread.threadRef)
       .filter(marker => unreadFacts.some(item => item.fact.kind === 'activity' && item.fact.activity.activityRef === marker.activityRef))
     const inbox = this.inboxDelta(nextAttention, [], [], consumed, [], activityMarkers)
-    // The hypothetical projection copies every map that its inbox delta can
-    // mutate, including the follower sets inside attentionByThread and the
-    // per-reader marker indexes; the fact indexes and the observation log are
-    // read-only here and stay shared.
-    const nextProjection: Projection = {
-      ...projection,
-      attention: new Map(projection.attention),
-      directMarkers: new Map(projection.directMarkers),
-      activityMarkers: new Map(projection.activityMarkers),
-      attentionByThread: new Map([...projection.attentionByThread].map(([threadRef, followers]) => [threadRef, new Set(followers)])),
-      attentionThreadsByMember: new Map([...projection.attentionThreadsByMember].map(([memberId, threads]) => [memberId, new Set(threads)])),
-      directMarkersByMember: new Map([...projection.directMarkersByMember].map(([memberId, threads]) =>
-        [memberId, new Map([...threads].map(([threadRef, markers]) => [threadRef, [...markers]]))])),
-      activityMarkersByMember: new Map([...projection.activityMarkersByMember].map(([memberId, threads]) =>
-        [memberId, new Map([...threads].map(([threadRef, markers]) => [threadRef, [...markers]]))])),
-    }
-    this.applyInboxDelta(nextProjection, inbox)
-    const remainingUnreadCount = this.unreadForFrom(nextProjection, memberId, thread.threadRef).length
-    return Object.freeze({ ...(task === undefined ? {} : { task }), thread, claims: task === undefined ? Object.freeze([]) : this.claimsForTaskFrom(projection, task.taskRef), anchor,
-      anchorMentions: projection.mentionsByMessage.get(anchor.messageRef) ?? [],
-      facts: Object.freeze(combined),
-      readThroughSequence, remainingUnreadCount, ...(attention === undefined ? {} : { attention: nextAttention[0] ?? attention }),
+    return Object.freeze({ ...(task === undefined ? {} : { task }), thread, unread,
+      ...(attention === undefined ? {} : { attentionBefore: attention }), readThroughSequence,
+      ...(attention === undefined ? {} : { attention: nextAttention[0] ?? attention }),
       consumedDirectMarkers: Object.freeze(consumed), inbox })
+  }
+
+  /** Derive the only legal durable result of one Thread read from a prior projection. */
+  private prepareReadFrom(projection: Projection, memberId: AgentTeamMemberId, workspaceId: WorkspaceId, request: { threadRef?: AgentTeamThreadRef | undefined; taskRef?: AgentTeamTaskRef | undefined }): PreparedRead {
+    const receipt = this.prepareReadReceiptFrom(projection, memberId, workspaceId, request)
+    const { task, thread } = receipt
+    const anchor = this.threadAnchorFrom(projection, thread.threadRef)
+    // The first read of a Thread after following also shows the bounded
+    // background that preceded the follow, so a reader sees what they joined.
+    const firstRead = receipt.attentionBefore !== undefined && receipt.attentionBefore.readThroughSequence < receipt.attentionBefore.startSequence
+    const unreadFactKeys = new Set(receipt.unread.map(item => this.threadFactKey(item.fact)))
+    const background = firstRead
+      ? this.threadFactsFrom(projection, thread.threadRef)
+        .filter((fact): fact is Extract<AgentTeamThreadFact, { kind: 'message' }> => fact.kind === 'message'
+          && fact.sequence < receipt.attentionBefore!.startSequence)
+        .map(fact => Object.freeze({ kind: 'message' as const, sequence: fact.sequence, message: fact.message,
+          mentions: projection.mentionsByMessage.get(fact.message.messageRef) ?? [],
+          occurredAt: this.occurredAtForFactFrom(projection, fact.sequence, fact.message.occurredAt) }))
+        .filter(fact => !unreadFactKeys.has(this.threadFactKey(fact))).slice(-12)
+      : []
+    const combined = [...background.map(fact => this.readFactFrom(projection, memberId, fact, false)), ...receipt.unread.slice(0, 20)]
+      .sort((left, right) => left.fact.sequence - right.fact.sequence)
+    const remainingUnreadCount = this.remainingUnreadAfter(projection, memberId, receipt)
+    return Object.freeze({ ...receipt, claims: task === undefined ? Object.freeze([]) : this.claimsForTaskFrom(projection, task.taskRef), anchor,
+      anchorMentions: projection.mentionsByMessage.get(anchor.messageRef) ?? [],
+      facts: Object.freeze(combined), remainingUnreadCount })
   }
 
   private readFactFrom(projection: Projection, memberId: AgentTeamMemberId, fact: AgentTeamThreadFact, unread: boolean): AgentTeamThreadReadFact {
@@ -2754,21 +2912,63 @@ export class AgentTeamLedger {
 
   private unreadForFrom(projection: Projection, memberId: AgentTeamMemberId, threadRef: AgentTeamThreadRef): readonly AgentTeamThreadReadFact[] {
     const attention = this.attentionForFrom(projection, memberId, threadRef)
-    const facts = this.threadFactsFrom(projection, threadRef)
-    const direct = this.directMarkersForFrom(projection, memberId, threadRef)
-    const directKeys = new Set(direct.map(marker => this.directMarkerKey(marker)))
+    const directKeys = new Set(this.directMarkersForFrom(projection, memberId, threadRef).map(marker => this.directMarkerKey(marker)))
     const activityKeys = new Set(this.activityMarkersForFrom(projection, memberId, threadRef).map(marker => this.activityMarkerKey(marker)))
     const result: AgentTeamThreadReadFact[] = []
-    for (const fact of facts) {
-      const marker = fact.kind === 'message' && directKeys.has(this.directMarkerKey({ memberId, threadRef,
-        messageRef: fact.message.messageRef, sequence: fact.sequence }))
-      const activityMarker = fact.kind === 'activity' && activityKeys.has(this.activityMarkerKey({ memberId, threadRef,
-        activityRef: fact.activity.activityRef, sequence: fact.sequence }))
-      const ordinary = attention !== undefined && fact.sequence >= attention.startSequence
-        && fact.sequence > attention.readThroughSequence && this.visibleToFollower(fact, memberId)
-      if (marker || activityMarker || ordinary) result.push(this.readFactFrom(projection, memberId, fact, true))
+    for (const fact of this.threadFactsFrom(projection, threadRef)) {
+      if (this.isUnreadFact(fact, memberId, threadRef, attention, directKeys, activityKeys)) {
+        result.push(this.readFactFrom(projection, memberId, fact, true))
+      }
     }
     return Object.freeze(result)
+  }
+
+  /**
+   * The single authority on "this fact is unread for this reader". The picture
+   * derivation and the remaining-count derivation both go through it, so the
+   * count a read reports can never disagree with the facts it lists. Marker
+   * membership arrives as key sets: the caller may be looking at a state the
+   * projection has not applied yet.
+   */
+  private isUnreadFact(
+    fact: AgentTeamThreadFact,
+    memberId: AgentTeamMemberId,
+    threadRef: AgentTeamThreadRef,
+    attention: AgentTeamThreadAttention | undefined,
+    directKeys: ReadonlySet<string>,
+    activityKeys: ReadonlySet<string>,
+  ): boolean {
+    const marker = fact.kind === 'message' && directKeys.has(this.directMarkerKey({ memberId, threadRef,
+      messageRef: fact.message.messageRef, sequence: fact.sequence }))
+    const activityMarker = fact.kind === 'activity' && activityKeys.has(this.activityMarkerKey({ memberId, threadRef,
+      activityRef: fact.activity.activityRef, sequence: fact.sequence }))
+    const ordinary = attention !== undefined && fact.sequence >= attention.startSequence
+      && fact.sequence > attention.readThroughSequence && this.visibleToFollower(fact, memberId)
+    return marker || activityMarker || ordinary
+  }
+
+  /**
+   * Unread count once this read's own Inbox delta has been applied, derived
+   * without materializing a hypothetical projection. The delta can only touch
+   * the reader's own Attention row and its own marker keys in one Thread, and
+   * every lookup in `isUnreadFact` is scoped to that same (member, Thread)
+   * pair, so the post-delta state is the Attention row the receipt already
+   * derived plus those marker keys with the delta's own removals and additions
+   * applied.
+   */
+  private remainingUnreadAfter(projection: Projection, memberId: AgentTeamMemberId, receipt: PreparedReadReceipt): number {
+    const threadRef = receipt.thread.threadRef
+    const directKeys = new Set(this.directMarkersForFrom(projection, memberId, threadRef).map(marker => this.directMarkerKey(marker)))
+    for (const marker of receipt.inbox.directMarkers.removed) directKeys.delete(this.directMarkerKey(marker))
+    for (const marker of receipt.inbox.directMarkers.added) directKeys.add(this.directMarkerKey(marker))
+    const activityKeys = new Set(this.activityMarkersForFrom(projection, memberId, threadRef).map(marker => this.activityMarkerKey(marker)))
+    for (const marker of receipt.inbox.activityMarkers.removed) activityKeys.delete(this.activityMarkerKey(marker))
+    for (const marker of receipt.inbox.activityMarkers.added) activityKeys.add(this.activityMarkerKey(marker))
+    let count = 0
+    for (const fact of this.threadFactsFrom(projection, threadRef)) {
+      if (this.isUnreadFact(fact, memberId, threadRef, receipt.attention, directKeys, activityKeys)) count += 1
+    }
+    return count
   }
 
   private visibleToFollower(fact: AgentTeamThreadFact, memberId: AgentTeamMemberId): boolean {
@@ -3572,8 +3772,8 @@ export class AgentTeamLedger {
   private assertSameThreadRead(operation: AgentTeamOperation, request: AgentTeamAuthorizedThreadReadRequest): asserts operation is AgentTeamThreadReadOperation {
     if (operation.kind !== 'team/thread-read' || !this.sameActor(operation.actor, request.actor)
       || operation.data.workspaceId !== request.workspaceId
-      || (request.threadRef !== undefined && operation.data.thread.threadRef !== request.threadRef)
-      || (request.taskRef !== undefined && operation.data.task?.taskRef !== request.taskRef)
+      || (request.threadRef !== undefined && threadReadTargetOf(operation.data).threadRef !== request.threadRef)
+      || (request.taskRef !== undefined && threadReadTargetOf(operation.data).taskRef !== request.taskRef)
       || (request.threadRef === undefined && request.taskRef === undefined)) this.throwRequestCollision(request.requestId)
   }
 
@@ -3704,14 +3904,18 @@ export class AgentTeamLedger {
       task: operation.data.task, thread: operation.data.thread })
   }
 
-  private threadReadResult(operation: AgentTeamThreadReadOperation): AgentTeamThreadReadResult {
-    // Loaded records are normalized by sortedRecords(); fresh writes always carry instants.
-    const { anchor, facts } = operation.data as unknown as { anchor: AgentTeamMessage; facts: readonly AgentTeamThreadReadFact[] }
-    return Object.freeze({ receipt: this.receipt(operation), ...(operation.data.task === undefined ? {} : { task: operation.data.task }), thread: operation.data.thread,
-      claims: operation.data.claims, anchor, anchorMentions: operation.data.anchorMentions, facts,
-      readThroughSequence: operation.data.readThroughSequence, remainingUnreadCount: operation.data.remainingUnreadCount,
-      ...(operation.data.attention === undefined ? {} : { attention: operation.data.attention }),
-      consumedDirectMarkers: operation.data.inbox.directMarkers.removed })
+  /**
+   * The Thread picture a read answers with, derived from the projection the
+   * read resolved against. Committed reads, no-op reads and retries all share
+   * this one derivation, so a read that writes nothing still returns the same
+   * Attention, facts, watermark and unread count a committed one would.
+   */
+  private readPicture(prepared: PreparedRead): Omit<AgentTeamThreadReadResult, 'receipt'> {
+    return Object.freeze({ ...(prepared.task === undefined ? {} : { task: prepared.task }), thread: prepared.thread,
+      claims: prepared.claims, anchor: prepared.anchor, anchorMentions: prepared.anchorMentions, facts: prepared.facts,
+      readThroughSequence: prepared.readThroughSequence, remainingUnreadCount: prepared.remainingUnreadCount,
+      ...(prepared.attention === undefined ? {} : { attention: prepared.attention }),
+      consumedDirectMarkers: prepared.inbox.directMarkers.removed })
   }
 
   private receipt(operation: AgentTeamOperation): AgentTeamOperationReceipt {
@@ -3808,9 +4012,16 @@ export class AgentTeamLedger {
     return new Set([...projection.tasks.values()].filter(task => task.channelRef === channelRef).map(task => task.threadRef))
   }
 
-  /** Ledgers written before message occurredAt existed store bare messages; Thread reads resolve instants from the originating operations. */
+  /**
+   * Ledgers written before message occurredAt existed store bare messages;
+   * snapshot-shaped Thread reads resolve instants from the originating
+   * operations. A receipt-shaped read carries no message at all, so it passes
+   * through untouched — the load path must never touch a shape it does not
+   * have, and it never writes either form back.
+   */
   private normalizeOperation(operation: AgentTeamOperation, occurrences: Map<AgentTeamMessageRef, string>, instants: Map<number, string>): AgentTeamOperation {
-    if (operation.kind !== 'team/thread-read') return operation
+    if (operation.kind !== 'team/thread-read' || !isThreadReadSnapshot(operation.data)) return operation
+    const data = operation.data
     const stamp = (message: AgentTeamStoredMessage): AgentTeamMessage => (
       message.occurredAt === undefined
         ? { ...message, occurredAt: occurrences.get(message.messageRef) ?? operation.occurredAt }
@@ -3821,10 +4032,10 @@ export class AgentTeamLedger {
         occurredAt: envelope.occurredAt ?? envelope.message.occurredAt ?? occurrences.get(envelope.message.messageRef) ?? operation.occurredAt }
       : { kind: 'activity', sequence: envelope.sequence, activity: envelope.activity,
         occurredAt: envelope.occurredAt ?? instants.get(envelope.sequence) ?? operation.occurredAt }
-    const facts = operation.data.facts.map((fact): AgentTeamThreadReadFact => (
+    const facts = data.facts.map((fact): AgentTeamThreadReadFact => (
       { ...fact, fact: stampEnvelope(fact.fact) }
     ))
-    return { ...operation, data: { ...operation.data, anchor: stamp(operation.data.anchor), facts } }
+    return { ...operation, data: { ...data, anchor: stamp(data.anchor), facts } }
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {

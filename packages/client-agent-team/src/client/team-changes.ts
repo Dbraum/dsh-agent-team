@@ -30,6 +30,11 @@ interface ScopePoll {
  * One long-poll per change scope, shared by every listening surface: panels
  * and pages never open parallel `changes` requests for the same scope, and
  * the poll is aborted as soon as the last subscriber leaves.
+ *
+ * Each poll keeps its own cursor, and a cursor only means something inside the
+ * scope it was issued for: the Host answers a presence scope from a
+ * process-local wake epoch and every other scope from a durable ledger
+ * position.
  */
 export class TeamChangeStream {
   private readonly polls = new Map<string, ScopePoll>()
@@ -74,7 +79,14 @@ export class TeamChangeStream {
         this.fail(key, poll, result.error.message)
         return
       }
-      if (result.value.version > version) {
+      // Any difference is a resolution in this scope's own cursor domain —
+      // normally growth, but a cursor left over from another domain (the two
+      // scopes count different things) or from an earlier Host lifetime can sit
+      // ahead of the domain value. Re-anchoring on difference instead of only
+      // on growth keeps such a subscription observable rather than silently
+      // parked, and the Host never answers a request whose cursor already
+      // equals the domain value, so this cannot spin.
+      if (result.value.version !== version) {
         version = result.value.version
         for (const listener of poll.listeners) listener({ type: 'changed', version })
       }

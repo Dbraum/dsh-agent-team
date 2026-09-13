@@ -16,8 +16,10 @@ import type {
   AgentTeamStoredThreadReadFact,
   AgentTeamTask,
   AgentTeamTaskActivity,
+  AgentTeamTaskRef,
   AgentTeamThread,
   AgentTeamThreadAttention,
+  AgentTeamThreadRef,
 } from "./entities.ts"
 
 /** The first durable operation in every Agent Team ledger. */
@@ -319,27 +321,56 @@ export interface AgentTeamThreadAttentionChangedOperation extends AgentTeamOpera
   }
 }
 
+/**
+ * Durable content of one Thread read: the watermark it advanced to and the
+ * Inbox delta it consumed. Everything else the read answered with — the Thread,
+ * its facts, the anchor, the reader's Attention, the unread count it left — is
+ * derived from the projection at read time and re-derived on every replay.
+ */
+export interface AgentTeamThreadReadReceipt {
+  readonly workspaceId: WorkspaceId
+  readonly memberId: AgentTeamMemberId
+  readonly threadRef: AgentTeamThreadRef
+  readonly taskRef?: AgentTeamTaskRef | undefined
+  readonly readThroughSequence: number
+  readonly inbox: AgentTeamInboxDelta
+}
+
+/**
+ * The pre-receipt form: the whole Thread picture the read answered with, frozen
+ * into the record. Ledgers written before the receipt form still hold these and
+ * keep loading unchanged — normalized and validated in place, never rewritten.
+ *
+ * The picture is no longer read back to answer anything: a repeated read reports
+ * the original receipt with a picture derived from the current projection, so
+ * these fields keep old records validating rather than serving responses.
+ */
+export interface AgentTeamThreadReadSnapshot {
+  readonly workspaceId: WorkspaceId
+  readonly memberId: AgentTeamMemberId
+  /** The Task this legacy read targeted. */
+  readonly task?: AgentTeamTask | undefined
+  readonly thread: AgentTeamThread
+  readonly claims: readonly AgentTeamClaim[]
+  readonly anchor: AgentTeamStoredMessage
+  /** Structured Member refs of the anchor Message, from its originating send operation. */
+  readonly anchorMentions: readonly AgentTeamMemberId[]
+  readonly facts: readonly AgentTeamStoredThreadReadFact[]
+  readonly readThroughSequence: number
+  /** Number of unread facts left after this bounded read. */
+  readonly remainingUnreadCount: number
+  /** The reader's post-read Attention snapshot, when the reader follows. */
+  readonly attention?: AgentTeamThreadAttention | undefined
+  readonly inbox: AgentTeamInboxDelta
+}
+
+/** Both durable Thread-read forms: the receipt every new read writes, and the legacy snapshot. */
+export type AgentTeamThreadReadData = AgentTeamThreadReadReceipt | AgentTeamThreadReadSnapshot
+
 /** Durable one-batch read and direct-marker consumption. It does not revise the Thread. */
 export interface AgentTeamThreadReadOperation extends AgentTeamOperationBase {
   readonly kind: 'team/thread-read'
-  readonly data: {
-    readonly workspaceId: WorkspaceId
-    readonly memberId: AgentTeamMemberId
-    /** Current public state captured for a stable idempotent read response. */
-    readonly task?: AgentTeamTask
-    readonly thread: AgentTeamThread
-    readonly claims: readonly AgentTeamClaim[]
-    readonly anchor: AgentTeamStoredMessage
-    /** Structured Member refs of the anchor Message, from its originating send operation. */
-    readonly anchorMentions: readonly AgentTeamMemberId[]
-    readonly facts: readonly AgentTeamStoredThreadReadFact[]
-    readonly readThroughSequence: number
-    /** Number of unread facts left after this bounded read. */
-    readonly remainingUnreadCount: number
-    /** The reader's post-read Attention snapshot, when the reader follows. */
-    readonly attention?: AgentTeamThreadAttention | undefined
-    readonly inbox: AgentTeamInboxDelta
-  }
+  readonly data: AgentTeamThreadReadData
 }
 
 /** Durable irreversible Member removal and global inbox cleanup. */

@@ -47,6 +47,48 @@ function replayLedger(facility: DomainFacility): AgentTeamLedger {
   return new AgentTeamLedger(facility.get('agent_team')!.table('operations') as unknown as KvTable<AgentTeamOperationId, AgentTeamOperation>)
 }
 
+/** Durable Member record plus its actor, for commits the service cannot make without a live Agent. */
+async function addLedgerMember(ledger: AgentTeamLedger, channelRef: AgentTeamChannelRef): Promise<AgentTeamMemberActor> {
+  const memberId = `member:agent-${crypto.randomUUID()}` as AgentTeamMemberActor['memberId']
+  const handle = 'reader'
+  await ledger.addMember({
+    requestId: requestId(`ledger-member-${memberId}`), workspaceId: alpha, handle, description: 'Reads work', presetId: 'team-member',
+    channelRefs: [channelRef], actor: agentTeamHumanActor(),
+    member: {
+      memberId, sessionId: SessionId(`session:${memberId}`), workspaceId: alpha, handle, description: 'Reads work',
+      presetId: 'team-member', privateMemoryPath: '/tmp/reader', state: 'enabled' as const,
+    },
+  })
+  return { kind: 'member', memberId, handle }
+}
+
+/**
+ * One Team service plus its storage pool, exposed so a test can dispose the
+ * service and boot a second one over the same durable records.
+ */
+async function restartHarness(pool: MemoryMediaPool): Promise<{ readonly ctx: Context; readonly facility: DomainFacility; readonly fiber: { dispose: () => Promise<void> } }> {
+  const ctx = new Context()
+  await ctx.plugin(Storage)
+  ctx.storage.backend.register('memory', new MemoryStorageBackend(pool))
+  const facility = new DomainFacility(ctx, { backend: 'memory', routes: {} })
+  ctx.storage.mount('domain', facility)
+  ctx.provide('storageDomain', facility)
+  ctx.provide('workspaceRegistry', {
+    get: (id: WorkspaceId) => id === alpha ? { id, path: process.cwd(), attachSession: async () => {}, archiveSession: async () => {} } : undefined,
+    list: () => [{ id: alpha, path: process.cwd() }],
+  })
+  ctx.provide('agents', { create: async () => { throw new Error('unused') }, resume: async () => { throw new Error('unused') } })
+  ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'mock', model: 'mock' }) })
+  ctx.provide('agentPresets', { mount: async () => { throw new Error('unused') } })
+  ctx.provide('tools', { schemas: () => [] })
+  ctx.provide('sessionPersistence', { list: async () => [] })
+  await ctx.plugin(InvariantRegistry)
+  await ctx.plugin(agentTeamInvariant)
+  const fiber = await ctx.plugin(AgentTeam)
+  cleanups.push(async () => { await fiber.dispose(); await facility.closeAll() })
+  return { ctx, facility, fiber }
+}
+
 /** Resolve only after a macrotask so a premature wake-up cannot hide behind microtasks. */
 async function staysPending(promise: Promise<unknown>, ms = 15): Promise<boolean> {
   let settled = false
@@ -63,7 +105,7 @@ async function startThread(ctx: Context, label: string): Promise<{ readonly thre
 }
 
 describe('scoped Team change notifications', () => {
-  it('does not wake any waiter when a Human Thread read commits', async () => {
+  it('does not wake or advance any waiter when a Human Thread read makes no progress', async () => {
     const { ctx } = await harness()
     const thread = await startThread(ctx, 'read-scope')
     const baseline = await ctx.agentTeam.changes({ afterVersion: 0 })
@@ -74,18 +116,19 @@ describe('scoped Team change notifications', () => {
 
     await ctx.agentTeam.readThread({ requestId: requestId('read'), workspaceId: alpha, taskRef: thread.taskRef })
 
-    // The read is durable and advances the version, yet invalidates nobody:
-    // a read only advances the reader's private watermark.
+    // Nothing was unread for the reader, so the read writes no operation and
+    // publishes no new version: no parked waiter can mistake it for a change.
     const after = await ctx.agentTeam.changes({ afterVersion: 0 })
-    expect(after.version).toBe(baseline.version + 1)
+    expect(after.version).toBe(baseline.version)
     expect(await staysPending(threadWaiter)).toBe(true)
     expect(await staysPending(globalWaiter)).toBe(true)
 
-    // A real content change on the same Thread still wakes both.
+    // A real content change on the same Thread still wakes both, at the
+    // durable position of the commit itself.
     const reply = await ctx.agentTeam.reply({ requestId: requestId('reply'), workspaceId: alpha, taskRef: thread.taskRef, body: 'Update', baseRevision: thread.revision })
     if (reply.kind !== 'committed') throw new Error(`expected committed reply, received ${reply.kind}`)
-    expect(await threadWaiter).toMatchObject({ version: after.version + 1 })
-    expect(await globalWaiter).toMatchObject({ version: after.version + 1 })
+    expect(await threadWaiter).toMatchObject({ version: reply.receipt.sequence })
+    expect(await globalWaiter).toMatchObject({ version: reply.receipt.sequence })
   })
 
   it('wakes a Thread waiter only for changes of that Thread', async () => {
@@ -99,8 +142,9 @@ describe('scoped Team change notifications', () => {
     await ctx.agentTeam.reply({ requestId: requestId('other-reply'), workspaceId: alpha, taskRef: second.taskRef, body: 'Unrelated', baseRevision: second.revision })
     expect(await staysPending(firstWaiter)).toBe(true)
 
-    await ctx.agentTeam.reply({ requestId: requestId('own-reply'), workspaceId: alpha, taskRef: first.taskRef, body: 'Related', baseRevision: first.revision })
-    expect(await firstWaiter).toMatchObject({ version: baseline.version + 2 })
+    const own = await ctx.agentTeam.reply({ requestId: requestId('own-reply'), workspaceId: alpha, taskRef: first.taskRef, body: 'Related', baseRevision: first.revision })
+    if (own.kind !== 'committed') throw new Error(`expected committed reply, received ${own.kind}`)
+    expect(await firstWaiter).toMatchObject({ version: own.receipt.sequence })
   })
 
   it('wakes Channel and Workspace waiters through their own scopes', async () => {
@@ -133,8 +177,48 @@ describe('scoped Team change notifications', () => {
     controller.abort()
     await expect(aborted).rejects.toThrow(/aborted/)
 
-    await ctx.agentTeam.reply({ requestId: requestId('after-abort'), workspaceId: alpha, taskRef: thread.taskRef, body: 'Still works', baseRevision: thread.revision })
-    expect(await survivor).toMatchObject({ version: baseline.version + 1 })
+    const afterAbort = await ctx.agentTeam.reply({ requestId: requestId('after-abort'), workspaceId: alpha, taskRef: thread.taskRef, body: 'Still works', baseRevision: thread.revision })
+    if (afterAbort.kind !== 'committed') throw new Error(`expected committed reply, received ${afterAbort.kind}`)
+    expect(await survivor).toMatchObject({ version: afterAbort.receipt.sequence })
+  })
+
+  it('re-derives the projection cursor from the durable records across a restart', async () => {
+    const pool = new MemoryMediaPool()
+    const first = await restartHarness(pool)
+    const thread = await startThread(first.ctx, 'cursor-restart')
+
+    // A Member record and its reply land outside the service (the bare harness
+    // has no live Agent): both are shared-projection commits, and the reply
+    // leaves the Human's own Thread unread.
+    const ledger = replayLedger(first.facility)
+    const actor = await addLedgerMember(ledger, thread.channelRef)
+    const reply = (await ledger.reply({ requestId: requestId('restart-reply'), workspaceId: alpha, taskRef: thread.taskRef,
+      body: 'Member work', baseRevision: thread.revision, actor })).value
+    if (reply.kind !== 'committed') throw new Error(`expected committed member reply, received ${reply.kind}`)
+    await first.fiber.dispose()
+
+    // The Human's read through the service really commits (there is something
+    // unread) and yet moves no cursor: it is private read progress.
+    const second = await restartHarness(pool)
+    expect((await second.ctx.agentTeam.changes({ afterVersion: 0 })).version).toBe(reply.receipt.sequence)
+    const read = await second.ctx.agentTeam.readThread({ requestId: requestId('restart-read'), workspaceId: alpha, taskRef: thread.taskRef })
+    expect(read.receipt).toBeDefined()
+    expect((await second.ctx.agentTeam.changes({ afterVersion: 0 })).version).toBe(reply.receipt.sequence)
+    await second.fiber.dispose()
+
+    // A further restart re-derives the same position from the records: neither
+    // zero (a process counter) nor the record count (which the private read
+    // advanced). A Client that parked before it is not answered by the restart.
+    const third = await restartHarness(pool)
+    const after = (await third.ctx.agentTeam.changes({ afterVersion: 0 })).version
+    expect(after).toBe(reply.receipt.sequence)
+    const parked = third.ctx.agentTeam.changes({ afterVersion: after })
+    expect(await staysPending(parked)).toBe(true)
+
+    const update = await third.ctx.agentTeam.reply({ requestId: requestId('restart-update'), workspaceId: alpha, taskRef: thread.taskRef,
+      body: 'After restart', baseRevision: reply.thread.revision })
+    if (update.kind !== 'committed') throw new Error(`expected committed reply, received ${update.kind}`)
+    expect(await parked).toMatchObject({ version: update.receipt.sequence })
   })
 
   it('validates change scopes before parking', async () => {
@@ -148,13 +232,31 @@ describe('ledger change scope and affected member derivation', () => {
   it('derives empty scopes for reads and precise scopes plus members for replies', async () => {
     const { ctx, facility } = await harness()
     const thread = await startThread(ctx, 'derive')
-    const read = await ctx.agentTeam.readThread({ requestId: requestId('derive-read'), workspaceId: alpha, taskRef: thread.taskRef })
-    const reply = await ctx.agentTeam.reply({ requestId: requestId('derive-reply'), workspaceId: alpha, taskRef: thread.taskRef, body: 'Derived', baseRevision: thread.revision })
-    if (reply.kind !== 'committed') throw new Error(`expected committed reply, received ${reply.kind}`)
-
     // Replay after every commit so the derived indexes include all operations.
     const ledger = replayLedger(facility)
-    const readOperation = ledger.getOperation(read.receipt.operationId)
+    const actor = await addLedgerMember(ledger, thread.channelRef)
+    // The member's reply is unread for the Human who follows their own Thread,
+    // so the Human's read below has a watermark to advance and commits.
+    const memberReply = (await ledger.reply({ requestId: requestId('derive-member-reply'), workspaceId: alpha, taskRef: thread.taskRef,
+      body: 'Unread work', baseRevision: thread.revision, actor })).value
+    if (memberReply.kind !== 'committed') throw new Error(`expected committed member reply, received ${memberReply.kind}`)
+    const recordsBeforeRead = ledger.status().sequence
+    const positionBeforeRead = ledger.projectionSequence()
+    expect(positionBeforeRead).toBe(memberReply.receipt.sequence)
+    const read = await ledger.readThread({ requestId: requestId('derive-read'), workspaceId: alpha, taskRef: thread.taskRef, actor: agentTeamHumanActor() })
+    if (!read.committed) throw new Error('expected a committed Thread read')
+
+    // A committed private read appends a durable record and still moves the
+    // shared-projection position nowhere: no waiter can mistake it for news.
+    expect(ledger.status().sequence).toBe(recordsBeforeRead + 1)
+    expect(ledger.projectionSequence()).toBe(positionBeforeRead)
+
+    const reply = (await ledger.reply({ requestId: requestId('derive-reply'), workspaceId: alpha, taskRef: thread.taskRef,
+      body: 'Derived', baseRevision: memberReply.thread.revision, actor: agentTeamHumanActor() })).value
+    if (reply.kind !== 'committed') throw new Error(`expected committed reply, received ${reply.kind}`)
+    expect(ledger.projectionSequence()).toBe(reply.receipt.sequence)
+
+    const readOperation = ledger.getOperation(read.value.receipt.operationId)
     expect(readOperation).toBeDefined()
     expect(ledger.changeScopesOf(readOperation!)).toEqual([])
 
@@ -164,7 +266,8 @@ describe('ledger change scope and affected member derivation', () => {
       { kind: 'channel', channelRef: thread.channelRef },
       { kind: 'thread', threadRef: thread.threadRef },
     ])
-    // The Human sender has no live handle, and nobody follows the Thread yet.
+    // The Human sender has no live handle, and the member never followed the
+    // Thread — replying does not enroll a follower.
     expect(ledger.affectedMembersOf(replyOperation!)).toEqual([AGENT_TEAM_HUMAN_MEMBER_ID])
   })
 

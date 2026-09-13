@@ -8,9 +8,11 @@
 
 Service 使用 `ctx.storageDomain`、`ctx.workspaceRegistry`、`ctx.agents`、`ctx.agentDefaultModel`、`ctx.agentPresets`、`ctx.tools`、`ctx.sessions` 和 `ctx.sessionPersistence`，并在 Cordis 发布 `ctx.agentTeam` 前打开带版本的 `agent_team` Domain。首次启动为稳定 Human Member 追加一条 `team/initialized` operation；后续启动重放同一 operation，不追加新记录。
 
-`status()` 返回当前持久 sequence、operation 数量、channel 数量、Agent Member 数量和 Human Member ref。它不发起模型请求，也不写 storage。`validateLedger()` 对照持久 operation table 检查包内 projection。
+`status()` 返回当前持久 sequence、operation 数量、channel 数量、Agent Member 数量和 Human Member ref。它不发起模型请求，也不写 storage。`validateLedger()` 对照持久 operation table 检查包内 projection。invariant companion 在挂载时完整重导该表——重放不通过的账本会让启动失败——但当这期间没有任何提交落地时，它会复用账本构造期已经跑过的那次记录级重放：该复用只能用一次，并受三项同一性检查把关（记录条数、末条 sequence、末条 operation id），而这三项只有 operations 表的唯一写者——账本的 commit 路径——能改变。期间任何一次提交、以及此后的每次校验，都会重新重放持久记录。此后每批提交只跑一次，且安排在这次提交调用返回**之后**执行，所以打开 Thread 不会等待 O(账本) 的重放。漂移由这次延后重放记录日志，并在随后每次提交上重新抛出，直到某次重放干净为止。
 
 每条 operation record 包含正数全局 sequence、唯一 operation/request id、actor snapshot 和前一条 operation id。重放拒绝无效字段、table key/id 不一致、sequence 缺口、previous link 断裂、重复 id 和非法状态转换。相同 request id 和 payload 的重试返回原 receipt；同 request id 携带变化后的 payload 会被拒绝。
+
+有一类记录存的是「进度」，而不是它当场报告的那份投影。`team/thread-read` receipt 只携带 Workspace、Member、Thread ref、可选 Task ref、read watermark 与 Inbox delta；Thread、其 facts、anchor、读者的 Attention 与读完后剩余的未读计数，都在每次重放时从 projection 重新派生，因此重放一条读不再需要克隆一份假设投影、也不再重新数未读。这个形态之前写入的记录会把整份画面连同 delta 一起冻结：同一个 strict union 同时接受两形，旧记录以自身完整派生作为 expected 值，加载时就地 normalize 与校验，绝不改写任何已存储字节。两形都不符的记录——receipt 里多带画面字段、旧记录缺了所属 Task 或缺了一条 fact——会让整个 domain 打不开，而不是被猜测。对一次已提交读的相同重试返回原 receipt，画面取自当前 projection，从不返回冻结的旧画面。
 
 ## 持久化与生命周期
 
@@ -32,7 +34,7 @@ Skills 是 Member 私有的：preset 不带共享 skill-filesystem row，Host �
 
 Member reply 必须携带准确的当前 Thread revision，并在一个 operation 内更新 Message 和 Thread facts。`threadRef` 是协作主身份；released task-only Client 可为 taskful Thread 传入 Host-resolved `taskRef` alias，而 Task/Claim 操作仍以 Task ref 为准。未读工作必须先 read；revision 过期时拒绝写入。Closed Task 拒绝 reply 和新的 Attention；reopen 恢复 Task，但不恢复之前的 Attention。taskless Thread 仍支持 reply、follow、mention、Inbox、read 和 history，但没有 Claim 或 Task resolution path。顶层消息可以直接 mention Agent：被 mention 的 Member 会开始关注新 Thread。在既有 Thread 中，Human 的 reply 提到 unfollowed Agent 时必须先取得 process-local one-use confirmation token 才提交 operation；Member 的此类 reply 会以 member_not_following 拒绝。Message fact 携带自身的 structured mention refs，Client 只为这些 Member 渲染 mention chip。claim/done/release 和 Task change 是有序的 host-authored Activity。Active Claim 只排斥相同的 normalized Direction；不同 Direction 可以并行。Task status 从 Claims 派生，Human accept/close 是覆盖事实。Close 原子释放 active Claims 并清除 Thread Attention。Member remove 原子标记 inactive、释放 owned active Claims、清除该成员的 Attention 和 direct markers，再归档 session。Message 与 Activity facts 共用一个有界 sequence cursor。
 
-`changes()` 是 Client 失效通知流。每个请求声明一个可选 `scope`（workspace、channel 或 thread）和可取消的传输 signal；一次提交的 operation 只唤醒 scope 与该 operation 派生范围匹配的 waiter（成员生命周期与 presence 唤醒其 Workspace，内容操作唤醒其 Channel 与 Thread）。Thread read 会持久化提交但不派生任何 scope，因为它只推进读者自己的私有水位。每次提交后，Host 只通知 Inbox projection 可能被该 operation 改变的 Member——即 operation 的 Attention/marker delta 加上被触及 Thread 的当前关注者——而不是全部在线 Agent。
+`changes()` 是 Client 失效通知流。每个请求声明一个可选 `scope`（workspace、channel 或 thread）和可取消的传输 signal；一次提交的 operation 只唤醒 scope 与该 operation 派生范围匹配的 waiter（成员生命周期与 presence 唤醒其 Workspace，内容操作唤醒其 Channel 与 Thread）。Thread read 不派生任何 scope，因为它只推进读者自己的私有水位——而一次读如果对读者没有任何未读（没有水位可推进、没有 marker 可消费），就完全不追加 operation：它返回同一份由 projection 派生的画面且不带 receipt，所以已读完的 Thread 既不付一次持久写、也不付一次重放。每次提交后，Host 只通知 Inbox projection 可能被该 operation 改变的 Member——即 operation 的 Attention/marker delta 加上被触及 Thread 的当前关注者——而不是全部在线 Agent。
 
 M1 支持单个 Host writer。Ledger 永久保留，不提供 snapshot 或 compaction。
 

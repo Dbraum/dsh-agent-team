@@ -426,7 +426,12 @@ export default class AgentTeam extends TypertRemoteService {
   })
   private lifecycleTail: Promise<void> = Promise.resolve()
   private accepting = true
-  private changeVersion = 0
+  /**
+   * Presence wake epoch: Agent running/idle/failure is runtime state with no
+   * durable fact behind it, so the presence scope counts those edge wakes in
+   * process. It never takes part in a projection waiter's comparison.
+   */
+  private presenceEpoch = 0
   private readonly changeWaiters = new Set<ChangeWaiter>()
   /**
    * The startup-opened remediation instance, held for the restart heal: the
@@ -611,7 +616,8 @@ export default class AgentTeam extends TypertRemoteService {
   async changes(request: AgentTeamChangesRequest, signal?: AbortSignal): Promise<AgentTeamChangesResult> {
     if (!Number.isInteger(request.afterVersion) || request.afterVersion < 0) throw new Error('afterVersion must be a non-negative integer')
     const scope = this.validateChangeScope(request.scope)
-    if (this.changeVersion > request.afterVersion || !this.accepting) return Object.freeze({ version: this.changeVersion })
+    const version = this.changeVersionOf(scope)
+    if (version > request.afterVersion || !this.accepting) return Object.freeze({ version })
     return new Promise<AgentTeamChangesResult>((resolve, reject) => {
       let settled = false
       const waiter: ChangeWaiter = {
@@ -628,7 +634,7 @@ export default class AgentTeam extends TypertRemoteService {
         if (settled) return
         settled = true
         this.changeWaiters.delete(waiter)
-        resolve(Object.freeze({ version: this.changeVersion }))
+        resolve(Object.freeze({ version: this.changeVersionOf(scope) }))
       }, 25_000)
       const onAbort = (): void => {
         if (settled) return
@@ -1214,7 +1220,9 @@ export default class AgentTeam extends TypertRemoteService {
   async readThread(request: AgentTeamThreadReadRequest): Promise<AgentTeamThreadReadResult> {
     const actor = this.humanCall(request.workspaceId)
     const result = await this.requireLedger().readThread({ ...request, actor })
-    if (result.committed) this.emitCommitted(result.value.receipt)
+    // A read that made no progress commits no operation and carries no receipt.
+    const receipt = result.committed ? result.value.receipt : undefined
+    if (receipt !== undefined) this.emitCommitted(receipt)
     return result.value
   }
 
@@ -1286,7 +1294,9 @@ export default class AgentTeam extends TypertRemoteService {
   async readThreadForAgent(agent: Agent, request: AgentTeamThreadReadRequest): Promise<AgentTeamThreadReadResult> {
     const actor = this.memberCall(agent, request.workspaceId)
     const result = await this.requireLedger().readThread({ ...request, actor })
-    if (result.committed) this.emitCommitted(result.value.receipt)
+    // A read that made no progress commits no operation and carries no receipt.
+    const receipt = result.committed ? result.value.receipt : undefined
+    if (receipt !== undefined) this.emitCommitted(receipt)
     const value = result.value
     // Private read-time enrich: an acceptance the reader just acknowledged is
     // a natural Task boundary, so the Host prices the reader's context once,
@@ -1400,6 +1410,17 @@ export default class AgentTeam extends TypertRemoteService {
   /** Validate the durable ledger against an independently replayed projection. */
   validateLedger(): void {
     this.requireLedger().validate()
+  }
+
+  /**
+   * Validate the durable ledger for the invariant's mount check. The
+   * constructor already re-derived every durable record against its own
+   * scratch projection, so this adopts that conclusion once while nothing has
+   * committed since; every other call, and every commit-driven validation,
+   * replays the whole table again.
+   */
+  validateLedgerAtMount(): void {
+    this.requireLedger().validateAtMount()
   }
 
   /**
@@ -2749,16 +2770,34 @@ export default class AgentTeam extends TypertRemoteService {
    * Presence-only scopes sit outside that: they change no durable projection,
    * so only matching presence waiters wake and the scope-less Inbox
    * subscriptions stay parked.
+   *
+   * Each woken waiter receives the version of its own scope's domain, so a
+   * wake can never hand a projection waiter a presence number or the other way
+   * around. Nothing here advances the projection version.
    */
   private emitChanged(scopes?: readonly AgentTeamChangeScope[]): void {
-    this.changeVersion += 1
     const touchesProjection = scopes === undefined || scopes.some(scope => scope.kind !== 'presence')
+    const touchesPresence = scopes !== undefined && scopes.some(scope => scope.kind === 'presence')
+    if (!touchesProjection && !touchesPresence) return
+    if (touchesPresence) this.presenceEpoch += 1
     for (const waiter of this.changeWaiters) {
       const waiterScope = waiter.scope
       if (scopes !== undefined && (waiterScope === undefined ? !touchesProjection : !scopes.some(scope => sameChangeScope(scope, waiterScope)))) continue
       this.changeWaiters.delete(waiter)
-      waiter.wake(this.changeVersion)
+      waiter.wake(this.changeVersionOf(waiterScope))
     }
+  }
+
+  /**
+   * The cursor domain of one scope: presence scopes count process-local edge
+   * wakes, every other scope compares against the durable ledger position of
+   * the newest shared-projection commit. The two domains are deliberately
+   * separate, so a presence edge cannot invalidate a projection subscriber and
+   * a private read invalidates no one.
+   */
+  private changeVersionOf(scope: AgentTeamChangeScope | undefined): number {
+    if (scope?.kind === 'presence') return this.presenceEpoch
+    return this.ledger?.projectionSequence() ?? 0
   }
 
   private validateChangeScope(scope: AgentTeamChangeScope | undefined): AgentTeamChangeScope | undefined {

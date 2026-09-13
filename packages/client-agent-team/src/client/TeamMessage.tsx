@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { MarkdownText, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MarkdownLabels } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AgentTeamMemberId, AgentTeamMessageAttachment, AgentTeamTaskRef } from '@wowyuarm/dsh-agent-team/types'
@@ -34,8 +34,15 @@ export interface TeamMessageProps {
   readonly children?: ReactNode
 }
 
-/** One chat message row with identity chrome and sender-appropriate rendering. */
-export function TeamMessage({ senderName, memberId, human, body, occurredAt, mentionNames, senderTitle, grouped, showGroupedTime, attachments, loadAttachment, t, onOpenRef, onResolveTaskRefs, children }: TeamMessageProps) {
+/**
+ * One chat message row with identity chrome and sender-appropriate rendering.
+ *
+ * Memoized because a timeline row is rendered by the page that owns the whole
+ * Thread: the Task-ref subscription below lives inside this component, so
+ * skipping a render here never detaches it. Callers must therefore keep the
+ * props they derive per render (mention names, ref callbacks) identity-stable.
+ */
+export const TeamMessage = memo(function TeamMessage({ senderName, memberId, human, body, occurredAt, mentionNames, senderTitle, grouped, showGroupedTime, attachments, loadAttachment, t, onOpenRef, onResolveTaskRefs, children }: TeamMessageProps) {
   const avatarStyle = human ? undefined : { '--team-avatar-hue': memberHue(memberId) } as CSSProperties
   // Literal bodies carry mention chips inline — Human input always, and
   // plain-prose Agent bodies where literal rendering loses nothing. Rich
@@ -152,7 +159,7 @@ export function TeamMessage({ senderName, memberId, human, body, occurredAt, men
       </div>
     </article>
   )
-}
+})
 
 /** Text nodes that Markdown rendered as prose rather than code or a link. */
 function markdownProseTextNodes(root: HTMLElement): Text[] {

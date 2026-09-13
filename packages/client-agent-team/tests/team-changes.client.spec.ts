@@ -81,6 +81,30 @@ describe('TeamChangeStream', () => {
     waiters.splice(0).forEach(resolve => resolve({ ok: true, value: { version: 4 } }))
   })
 
+  it('re-anchors a poll whose cursor sits ahead of the answered domain', async () => {
+    const parked: Array<(value: { ok: true; value: { version: number } }) => void> = []
+    const calls: FakeCall[] = []
+    const changes = vi.fn((request: { afterVersion: number; scope?: unknown }, signal: AbortSignal) => {
+      calls.push({ request, signal })
+      if (request.afterVersion === 0) return Promise.resolve({ ok: true as const, value: { version: 40 } })
+      return new Promise(resolve => { parked.push(resolve) }) as never
+    })
+    const stream = new TeamChangeStream(changes as never)
+    const scope = { kind: 'presence' as const, workspaceId: 'w1' as WorkspaceId }
+    const listener = vi.fn()
+    stream.subscribe(scope, listener)
+    await vi.waitFor(() => expect(parked.length).toBe(1))
+    expect(calls[1]!.request).toEqual({ afterVersion: 40, scope })
+
+    // The Host answers this scope's own domain with a value below the cursor
+    // the poll held (a cursor from another scope or an earlier Host lifetime).
+    // Growth-only comparison would swallow the update and park the subscriber
+    // blind until the domain value passed the stale cursor.
+    parked[0]!({ ok: true, value: { version: 3 } })
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledWith({ type: 'changed', version: 3 }))
+    await vi.waitFor(() => expect(calls[2]!.request).toEqual({ afterVersion: 3, scope }))
+  })
+
   it('delivers failures to listeners and restarts cleanly for the next subscriber', async () => {
     let attempts = 0
     const changes = vi.fn((request: { afterVersion: number }) => {
