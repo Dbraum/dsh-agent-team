@@ -80,6 +80,19 @@ Team mode
 
 只在可信 Workspace 中创建 Agent。Team Member preset 会给被管理的 Agent Session 授予 `danger-full-access`。
 
+## 与同名插件的区别
+
+另外三个 DSH 插件名字相近，但解决的是不同的问题 —— 其中一个可能更适合你：
+
+| 插件 | 它是什么 | 工作单位 |
+| --- | --- | --- |
+| [`NanmiCoder/dsh-agent-teams`](https://github.com/NanmiCoder/dsh-agent-teams) | 把**当前** DSH session 变成 captain，由它组建 sub-agent、把目标拆成带依赖的任务、并通过直接通信协调 | 一个 **session** |
+| [`toolclub/dsh-agent-team-gui`](https://github.com/toolclub/dsh-agent-team-gui) | 可复用的「规划 → 实现 → 评审」团队，每个成员可选不同模型，Run Center 查看 token 用量 | 一次 **workflow run** |
+| [`limuyang2/agent-team`](https://github.com/limuyang2/agent-team)（npm 名 `@limuyang2/dsh-agent-team`） | 在一个 DSH 窗口里组一支独立 root agent 的队：混用模型与 provider、指定一个 Leader，每个成员在自己的会话里工作、共享同一个 Workspace | 一支**组起来执行任务的队** |
+| **`dsh-agent-team`**（本插件） | 每个 agent 是持久 Member 身份，带自己的私有记忆、笔记与技能；Channel 与职责由你分配，Task Thread 是一条进度线 | 一支**常驻团队** |
+
+实际差别：你上周创建的 Member，今天还是同一个 Member —— 同样的记忆、职责和私有笔记 —— 即使它的 session 已结束、上下文已滚动、或 DSH 重启过。另外三个里，团队是围绕手头这次工作组建的 —— 一次 session、一次 workflow run，或一支有 Leader 的队。
+
 ## 卸载
 
 从 profile 移除 bundle，同时会移除它组合进来的层：

@@ -80,6 +80,19 @@ Team mode
 
 Create an Agent only in a trusted Workspace. The Team Member preset intentionally grants managed Agent Sessions `danger-full-access`.
 
+## Not to be confused with
+
+Three other DSH plugins carry similar names and solve a different problem — one of them may fit you better:
+
+| Plugin | What it is | Its unit of work |
+| --- | --- | --- |
+| [`NanmiCoder/dsh-agent-teams`](https://github.com/NanmiCoder/dsh-agent-teams) | Turns the current DSH session into a captain that assembles sub-agents, splits a goal into dependency-aware tasks, and coordinates them through direct messages | one **session** |
+| [`toolclub/dsh-agent-team-gui`](https://github.com/toolclub/dsh-agent-team-gui) | A reusable plan → implement → review team with a model chosen per member, and a Run Center for token usage | one **workflow run** |
+| [`limuyang2/agent-team`](https://github.com/limuyang2/agent-team) — publishes `@limuyang2/dsh-agent-team` | Builds a team of independent root agents inside one DSH window: mix models and providers, assign one Leader, and let every member work in its own conversation over a shared Workspace | one **assembled team** |
+| **`dsh-agent-team`** (this plugin) | Every agent is a durable Member identity with its own private memory, notes and skills; Channels and responsibilities are yours to assign, and a Task Thread is one line of progress | a **standing team** |
+
+The practical difference: a Member you created last week is still the same Member today — same memory, same responsibilities, same private notes — after its session ended, its context rolled over, or DSH restarted. In the other three, a team is assembled around the work at hand — a session, a workflow run, or a Leader-led team.
+
 ## Uninstall
 
 Remove the bundle from the profile; this also removes its composed layers:
