@@ -1,6 +1,6 @@
 {
   "name": "@wowyuarm/dsh-agent-team",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "A persistent agent team for long-running collaboration in DeepSeek Harness",
   "repository": {
     "type": "git",
@@ -178,11 +178,14 @@
     "react": "^18.2.0"
   },
   "keywords": [
+    "agent-team",
     "deepseek-harness",
     "dsh",
     "dsh-plugin",
-    "agent-team",
     "multi-agent",
-    "ai-agents"
+    "agent-orchestration",
+    "ai-agents",
+    "deepseek",
+    "multi-agent-systems"
   ]
 }
