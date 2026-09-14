@@ -4112,7 +4112,13 @@ describe('Agent Team Member private memory directory sanitization (issue #7)', (
     // the record names: that is the real Member's private memory, and this is
     // the shape that wiped three live directories on 2026-08-23.
     const foreignId = 'member:1a2b3c4d-0000-4000-8000-000000000004' as AgentTeamMemberId
-    const foreignPath = join(root, 'other-home', 'agent-team', 'members', foreignId)
+    // Containment is about the location, not the spelling: this arm only needs
+    // a directory outside this process's members root, so it uses the sanitized
+    // name — win32 cannot create a colon directory at all (the colon is an NTFS
+    // alternate-data-stream separator, so mkdir reports ENOENT). The colon
+    // spelling is covered by the same-home arm below, gated to the platforms
+    // that can hold such a directory.
+    const foreignPath = join(root, 'other-home', 'agent-team', 'members', foreignId.replaceAll(':', '-'))
     await mkdir(join(foreignPath, 'notes'), { recursive: true })
     await writeFile(join(foreignPath, 'notes', 'kept.md'), 'real private memory')
     await runtime.cleanupRemovedMember({ memberId: foreignId, sessionId: SessionId('session:probe-foreign-cleanup'), privateMemoryPath: foreignPath } as never)
