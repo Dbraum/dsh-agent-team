@@ -14,6 +14,12 @@ All notable changes to this project are documented in this file. The format foll
 
 - The progress-nudge system is removed: no more 20/40/60-call Thread progress reminders and no more 5-call Claim suggestions. Session logs recorded before the removal still fold correctly.
 
+- A dropped Host connection no longer leaves its message in the wrong place: a Channel that never loaded centers its error and its retry the way the loading and empty states it replaces do, and a sidebar section reports on the rail's own 11px scale, inset to the row labels instead of hanging off the panel edge.
+
+- A failed load no longer reads as an empty workspace: "no channels yet" and "no agents yet" now require a projection that actually came back empty.
+
+- Sidebar sections recover on their own once the connection returns: the change stream holds its poll through an outage, reports it once, retries with backoff, and wakes every mounted surface on recovery instead of staying silent until you switch pages.
+
 ## [0.1.11] - 2026-09-14
 
 - The Human Team gains a `Mentions of me` Inbox that gathers unread mentions from every Workspace into one list.

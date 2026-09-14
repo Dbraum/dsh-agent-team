@@ -493,6 +493,40 @@ describe('Team archival surfaces', () => {
     await b.runtime.dispose()
   })
 
+  it('replaces the rail empty claims with one error line when the connection drops', async () => {
+    const b = await runtimeWithTeam({ mode: 'team', workspaceId: 'w1' })
+    const readChannels = b.viewChannels.getMockImplementation()!
+    const readMembers = b.members.getMockImplementation()!
+    await b.view.findByText('还没有频道')
+    // The opening probe consumes the first publish silently, so the second one
+    // is what refreshes the mounted Panels — here with an emptied roster.
+    b.publishChannelUpdate()
+    b.members.mockResolvedValue({ ok: true, value: [] } as never)
+    b.publishChannelUpdate()
+    await b.view.findByText('还没有 Agent')
+
+    // The Host connection drops: each Panel reports the failure on the rail,
+    // and a failed load must not additionally read as an empty workspace. The
+    // reads fail too, exactly as they do when the transport is gone.
+    b.viewChannels.mockResolvedValue({ ok: false, error: { message: 'transport down' } } as never)
+    b.members.mockResolvedValue({ ok: false, error: { message: 'transport down' } } as never)
+    b.failChanges()
+    expect((await b.view.findAllByText('transport down')).length).toBeGreaterThanOrEqual(2)
+    expect(b.view.queryByText('还没有频道')).toBeNull()
+    expect(b.view.queryByText('还没有 Agent')).toBeNull()
+
+    // The transport returns and the wake that follows carries a new version:
+    // the still-mounted rail drops the error line and picks up the Channel
+    // created while it was cut off — no remount, no page reload.
+    b.seedChannel({ channelRef: 'channel:recovery', workspaceId: 'w1', name: 'recovery', description: 'created while cut off', createdAtSequence: 2 })
+    b.viewChannels.mockImplementation(readChannels)
+    b.members.mockImplementation(readMembers)
+    b.recoverChanges()
+    await b.view.findByRole('button', { name: '# recovery' })
+    expect(b.view.queryByText('transport down')).toBeNull()
+    await b.runtime.dispose()
+  })
+
   it('archives a Channel from the row menu behind a destructive confirm', async () => {
     const b = await runtimeWithTeam({ initialChannels: true })
     fireEvent.click(b.view.getByRole('button', { name: '团队' }))

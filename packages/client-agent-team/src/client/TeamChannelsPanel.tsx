@@ -211,7 +211,10 @@ export function TeamChannelsPanel(props: TeamChannelsPanelProps) {
         )}
       >
         {loading && view === undefined && <p className={css.emptyState}>{t('loadingChannels')}</p>}
-        {!loading && (view?.channels.length ?? 0) === 0 && <p className={css.emptyState}>{t('emptyChannels')}</p>}
+        {/* An empty claim needs a loaded projection, and a standing error
+            overrides it: a failed load reports through the error line instead
+            of additionally reading as "no channels yet". */}
+        {!loading && error === undefined && view !== undefined && view.channels.length === 0 && <p className={css.emptyState}>{t('emptyChannels')}</p>}
         <div className={css.channelList}>
           {orderedChannels.map(channel => {
             const joined = membership.get(channel.channelRef) ?? new Set<AgentTeamMemberId>()

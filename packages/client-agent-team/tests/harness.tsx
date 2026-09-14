@@ -214,6 +214,9 @@ export async function runtimeWithTeam(options?: { mode?: 'team'; workspaceId?: s
   // by that probe and only the second one wakes subscribers — seed/publish
   // twice when a change-driven refresh must be observed.
   let changeVersion = 0
+  // Set by `failChanges`: while it holds a message every `changes` call fails,
+  // which is how a dropped Host connection reaches the mounted surfaces.
+  let changeFailure: string | undefined
   // Waiters carry their request so publishers can mirror the Host's scope
   // filtering: a presence wake invalidates only presence subscribers.
   const changeWaiters: Array<{ request: { afterVersion: number; scope?: { kind?: string } }; resolve: (value: { ok: true; value: { version: number } }) => void }> = []
@@ -333,9 +336,24 @@ export async function runtimeWithTeam(options?: { mode?: 'team'; workspaceId?: s
     inboxRows = rows.map(row => ({ workspaceId: row.workspaceId, item: row as Record<string, unknown> }))
     wakeAll()
   }
-  const changes = vi.fn((request: { afterVersion: number; scope?: unknown }, _signal?: AbortSignal) => changeVersion > request.afterVersion
+  const changes = vi.fn((request: { afterVersion: number; scope?: unknown }, _signal?: AbortSignal) => changeFailure === undefined && changeVersion > request.afterVersion
     ? Promise.resolve({ ok: true as const, value: { version: changeVersion } })
-    : new Promise<{ ok: true; value: { version: number } }>(resolve => { changeWaiters.push({ request: request as { afterVersion: number; scope?: { kind?: string } }, resolve }) }))
+    : changeFailure === undefined
+      ? new Promise<{ ok: true; value: { version: number } }>(resolve => { changeWaiters.push({ request: request as { afterVersion: number; scope?: { kind?: string } }, resolve }) })
+      : Promise.resolve({ ok: false as const, error: { code: 'transport', message: changeFailure, details: {} } }))
+  /**
+   * Simulates the Host connection dropping: every later `changes` call fails,
+   * and parking waiters are released so each live poll re-issues and reports the
+   * failure to its listeners.
+   */
+  const failChanges = (message = 'transport down'): void => { changeFailure = message; wakeAll() }
+  /**
+   * Simulates the transport coming back: `changes` answers again, and the wake
+   * that follows carries a new version, so every mounted surface re-reads. A
+   * surface whose own reads failed while it was cut off heals only from such a
+   * wake — it must not need a remount for it.
+   */
+  const recoverChanges = (): void => { changeFailure = undefined; wakeAll() }
   const publishAgentReply = () => {
     const top = viewItems[0]!
     viewItems = [{ ...top, messageCount: 2 }, { ...top, message: { ...(top.message as object), messageRef: 'message:reply', sender: 'member:builder', body: 'agent reply', topLevel: false, sequence: 3 }, messageCount: 2 }]
@@ -372,5 +390,5 @@ export async function runtimeWithTeam(options?: { mode?: 'team'; workspaceId?: s
   const disposeSettings = runtime.slots.register({ name: 'sidebar.settings', priority: 0 }, BaselineSettings as never)
   const team = await runtime.mount({ inject: [...inject], apply })
   const view = runtime.renderRoot()
-  return { runtime, team, view, disposeWorkspace, disposeSettings, members, addMember, status, viewChannels, createChannel, updateChannel, archiveChannel, putAttachment, getAttachment, updateMember, recoverMember, clearMemberContext, archiveMember, modelCatalog, joinChannel, removeChannelMember, sendMessage, reply, changeTask, promoteThread, resolveTaskRefs, publishAgentReply, publishPresence, seedChannel, publishChannelUpdate, readThread, loadThreadHistory, threadObservations, changes, inbox, seedInbox }
+  return { runtime, team, view, disposeWorkspace, disposeSettings, members, addMember, status, viewChannels, createChannel, updateChannel, archiveChannel, putAttachment, getAttachment, updateMember, recoverMember, clearMemberContext, archiveMember, modelCatalog, joinChannel, removeChannelMember, sendMessage, reply, changeTask, promoteThread, resolveTaskRefs, publishAgentReply, publishPresence, seedChannel, publishChannelUpdate, failChanges, recoverChanges, readThread, loadThreadHistory, threadObservations, changes, inbox, seedInbox }
 }

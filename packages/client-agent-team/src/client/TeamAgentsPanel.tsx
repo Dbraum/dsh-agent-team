@@ -250,7 +250,9 @@ export function TeamAgentsPanel({ workspaceId, loadMembers, subscribeChanges, ad
         )}
       >
         {loading && members.length === 0 && <p className={css.emptyState}>{t('loadingAgents')}</p>}
-        {!loading && members.length === 0 && <p className={css.emptyState}>{t('emptyAgents')}</p>}
+        {/* `members` is empty both before the first successful load and after a
+            failed one, so the empty claim additionally requires a clear error. */}
+        {!loading && error === undefined && members.length === 0 && <p className={css.emptyState}>{t('emptyAgents')}</p>}
         <div className={css.agentList}>
           {orderedMembers.map(status => (
             <SortableRow key={status.member.memberId} drag={drag} orderKey={status.member.memberId}>

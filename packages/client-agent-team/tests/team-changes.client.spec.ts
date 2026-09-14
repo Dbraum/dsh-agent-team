@@ -105,25 +105,67 @@ describe('TeamChangeStream', () => {
     await vi.waitFor(() => expect(calls[2]!.request).toEqual({ afterVersion: 3, scope }))
   })
 
-  it('delivers failures to listeners and restarts cleanly for the next subscriber', async () => {
-    let attempts = 0
-    const changes = vi.fn((request: { afterVersion: number }) => {
-      attempts += 1
-      if (attempts === 1) return Promise.resolve({ ok: false as const, error: { code: 'transport', message: 'transport down', details: {} } })
-      if (request.afterVersion === 0) return Promise.resolve({ ok: true as const, value: { version: 1 } })
-      return new Promise<{ ok: true; value: { version: number } }>(() => {})
-    })
-    const stream = new TeamChangeStream(changes as never)
-    const scope = { kind: 'workspace' as const, workspaceId: 'w1' as WorkspaceId }
-    const listener = vi.fn()
-    const dispose = stream.subscribe(scope, listener)
-    await vi.waitFor(() => expect(listener).toHaveBeenCalledWith({ type: 'failed', message: 'transport down' }))
-    dispose()
+  it('reports one failure per outage and resyncs the mounted listener on recovery', async () => {
+    vi.useFakeTimers()
+    try {
+      type Answer = { ok: true; value: { version: number } } | { ok: false; error: { code: string; message: string; details: object } }
+      let online = true
+      let version = 4
+      const parked: Array<(answer: Answer) => void> = []
+      const changes = vi.fn((request: { afterVersion: number }) => {
+        if (!online) return Promise.resolve({ ok: false as const, error: { code: 'transport', message: 'transport down', details: {} } })
+        if (version > request.afterVersion) return Promise.resolve({ ok: true as const, value: { version } })
+        // An equal cursor parks until the Host's keep-alive deadline, exactly
+        // like the real long poll.
+        return new Promise<Answer>(resolve => { parked.push(resolve) })
+      })
+      const stream = new TeamChangeStream(changes as never)
+      const scope = { kind: 'workspace' as const, workspaceId: 'w1' as WorkspaceId }
+      const listener = vi.fn()
+      const dispose = stream.subscribe(scope, listener)
+      await vi.advanceTimersByTimeAsync(0)
+      // The opening sample is silent, and the poll parks on the sampled cursor.
+      expect(changes).toHaveBeenCalledTimes(2)
+      expect(listener).not.toHaveBeenCalled()
 
-    const next = vi.fn()
-    stream.subscribe(scope, next)
-    await vi.waitFor(() => expect(changes.mock.calls.length).toBeGreaterThanOrEqual(3))
-    expect(next).not.toHaveBeenCalled()
+      // The transport drops under the parked wait: every listener hears about
+      // the outage once, and the retries inside it stay silent.
+      online = false
+      parked.splice(0).forEach(resolve => { resolve({ ok: false, error: { code: 'transport', message: 'transport down', details: {} } }) })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(listener).toHaveBeenCalledTimes(1)
+      expect(listener).toHaveBeenCalledWith({ type: 'failed', message: 'transport down' })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(changes).toHaveBeenCalledTimes(3)
+      expect(listener).toHaveBeenCalledTimes(1)
+
+      // Recovery answers with the version the outage began at — nothing
+      // committed while the transport was gone. The mounted listener still has
+      // to hear it, because its own reads failed with the transport.
+      online = true
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(changes).toHaveBeenCalledTimes(4)
+      parked.splice(0).forEach(resolve => { resolve({ ok: true, value: { version: 4 } }) })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(listener).toHaveBeenCalledTimes(2)
+      expect(listener).toHaveBeenLastCalledWith({ type: 'changed', version: 4 })
+
+      // The re-anchored poll parks again, and a real commit wakes it the
+      // ordinary way.
+      version = 9
+      parked.splice(0).forEach(resolve => { resolve({ ok: true, value: { version: 9 } }) })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(listener).toHaveBeenLastCalledWith({ type: 'changed', version: 9 })
+
+      // Leaving is the only thing that stops a retrying poll: no timer survives
+      // the last subscriber.
+      const total = changes.mock.calls.length
+      dispose()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(changes).toHaveBeenCalledTimes(total)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('resumes a re-subscribed scope from its last observed version', async () => {

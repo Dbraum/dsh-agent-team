@@ -544,7 +544,7 @@
   font-size: 11px;
   gap: 8px;
   justify-content: space-between;
-  padding: 8px;
+  padding: 8px 12px;
 }
 
 .rowAlert {
@@ -552,6 +552,20 @@
   font-size: 11px;
   overflow-wrap: anywhere;
   padding: 2px 8px 6px;
+}
+
+/* A Panel's own failure line, on the rail's 11px alert scale. The 12px inset
+   lands the text on the row labels (list padding 4px + row padding 8px), so a
+   failed load reads as part of the list instead of loose rail text. A missing
+   CSS-module class resolves to `undefined` and renders unstyled: this rule is
+   what the Panels' `css.error` resolves to, so the two stay in step. */
+.error {
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 11px;
+  line-height: 16px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  padding: 4px 12px 6px;
 }
 
 .editDescription {

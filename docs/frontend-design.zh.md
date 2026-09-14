@@ -100,6 +100,14 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 - membership 语义跟随 Host：加入要求 `availability === 'active'`（Host 会拒绝其他 availability），退出只要求 membership 事实本身，所以已经加入但暂时不可用的成员仍然保留可用的 移除。
 - 只有侧栏 Agents 在写法上不同：它像目录那样直呼 `builder`，其余花名册按 composer 的称呼写 `@builder`。
 
+### 失败态呈现（failure surfaces）
+
+- 投影失败的呈现只有两种，选哪一种等于声明「屏幕上还剩什么」。**整面失败**（从未加载出投影）用 `errorState`：与它所替代的 loading / empty 面共用同一份空白区居中（`margin: auto`、`padding: 32px 0`），保持在 880px 阅读列内，取 12px/18px 的 error 字号与 `--dsw-alias-state-error-primary`，内容是 Host message 加一个重新发起读取的 `重试`——message 与按钮同在一个 `role="alert"` 里。**行旁失败**（行还在）用内联 `error`：在内容列内 `margin: 0`，读作所属列表的最后一行，而不是让已有内容的面重新居中。
+- 两种失败都不充当空态：空的判定要求「投影成功返回且确实为空」（`view !== undefined`、无 error、里面没有东西）。所以断连永远不会被读成「这个工作区是空的」。
+- 侧栏用同一套形状的 rail 尺度：Panel 自身的失败行是 11px/16px 的 `--dsw-alias-state-error-primary`，左侧缩进 12px，使文字落在它所替代的行标签上（列表缩进 4px + 行缩进 8px），而不是落在 Panel 边缘；行自身的失败（`rowAlert`）在行内保持同一尺度。
+- Panel 失败按 Panel 记：每个挂载中的 Panel 各自报告它看到的那次断连，所以一次断连会在侧栏出现同一条消息，正文自身读取也失败时再在页面上出现一次。
+- Panel 失败行不带重试按钮：侧栏靠 change stream 自愈——断连只上报一次，传输恢复后唤醒全部 listener（见 [`architecture.md`](architecture.md)）。
+
 ### 时间线滚动（timeline-scroll）
 
 - 策略：读者停留在底部（距底 <48px 视为 pinned）时跟随新内容；不在底部时不打扰。
@@ -155,7 +163,9 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 
 - 全部用户可见文案经 locale key（`locales.ts` zh/en 同构，key 类型取自 zh）。禁止在组件里拼接英文句子。
 - 参数化 key 的约定：`{count}` 数量、`{ids}` 成员句柄列表、`{kind}` 内部种类、`{number}` 任务号、`{actor}`/`{direction}` 活动主体。
-- 错误信息展示原始 Host message（如 transport 错误），包装句用 locale key。
+- 错误文案跟随 Host：有明确补救动作的拒绝走 locale key（`staleRevision`、`memberNotFollowing`），而 Client 无法更好地措辞的失败——例如传输断开——直接展示 Host 自己的 message。
+
+> TODO：原始 transport message 应该换成本地化文案，还是保持 Host 的原话？当前各面是原样展示。
 
 ## 可访问性基线
 
@@ -173,3 +183,4 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 - 影响可见 UI、Client bundle、slot 或 Remote activation 的改动：`npm run typecheck && npm test && npm run lint && npm run build && npm run test:browser`。Thread-first 变更的 browser 验收还须覆盖默认 taskless 发送、default-off 「作为任务」键盘切换、promotion 后 Host reread、taskless header/Claim gating，以及桌面与 390×844。
 - 截图写入 Git 忽略的 `artifacts/browser/`，仅供本次审查；少量能说明验收结论的代表图复制进 `.scratch/archive/YYYY-MM/<work>/validation/` 并附 README 说明。
 - 本文档描述的行为变化必须在同一次改动中同步更新；历史设计来由归档到 `.scratch/archive/`，正式文档只链接不转述。
+- CSS Module 里 TSX 引用了、但模块没定义的 class 会解析成 `undefined`，元素因此**无样式渲染**，且 build、类型检查、测试都不会报错。当某条规则的存在与否决定布局时，要到组装后的 bundle 里取证（computed style、offset 或截图），不要只读 TSX；把依赖它的状态写成断言，而不是写成注释。

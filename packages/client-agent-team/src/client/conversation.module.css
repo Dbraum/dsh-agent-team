@@ -210,20 +210,30 @@
   width: 8px;
 }
 
-.error,
-.errorState {
+/* An inline failure line stays in the content column, under the rows it
+   belongs to. */
+.error {
   color: var(--dsw-alias-state-error-primary);
   font-size: 12px;
   line-height: 18px;
-  margin: 0 auto;
+  margin: 0;
   max-width: 880px;
   padding-top: 6px;
 }
+/* A failure that replaces the whole surface rides the same free space as the
+   loading and empty surfaces it stands in for, instead of hugging the top
+   edge: `margin: auto` also takes the box off stretch and centers it. */
 .errorState {
   align-items: center;
+  color: var(--dsw-alias-state-error-primary);
   display: flex;
+  font-size: 12px;
   gap: 8px;
   justify-content: space-between;
+  line-height: 18px;
+  margin: auto;
+  max-width: 880px;
+  padding: 32px 0;
 }
 
 .welcomeSurface {

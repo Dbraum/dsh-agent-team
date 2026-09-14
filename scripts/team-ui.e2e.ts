@@ -2,7 +2,7 @@ import { cp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { chromium, type Browser, type Page } from 'playwright'
-import { launchWebScaffold, watchConsole, type WebScaffold } from './scaffold.ts'
+import { launchWebScaffold, acknowledgeReloadConnectionLoss, watchConsole, type WebScaffold } from './scaffold.ts'
 import { connectFreshWorkspaceZh } from './support.ts'
 
 const TEAM_ROOT = '__TEAM_ROOT__'
@@ -17,6 +17,7 @@ const UI04_SHOTS = join(BROWSER_ARTIFACTS, 'ui-04')
 const UI05_SHOTS = join(BROWSER_ARTIFACTS, 'ui-05')
 const UI06_SHOTS = join(BROWSER_ARTIFACTS, 'ui-06')
 const UI07_SHOTS = join(BROWSER_ARTIFACTS, 'ui-07')
+const UI08_SHOTS = join(BROWSER_ARTIFACTS, 'ui-08')
 let scaffold: WebScaffold | undefined
 let browser: Browser | undefined
 
@@ -69,6 +70,7 @@ async function installLocalBundle(): Promise<void> {
   await mkdir(UI05_SHOTS, { recursive: true })
   await mkdir(UI06_SHOTS, { recursive: true })
   await mkdir(UI07_SHOTS, { recursive: true })
+  await mkdir(UI08_SHOTS, { recursive: true })
 }
 
 it('drives the complete opt-in Agent Team journey in real Web', async () => {
@@ -1320,6 +1322,79 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   await expect.poll(async () => await inboxRow.count()).toBe(0)
   await page.screenshot({ path: join(UI07_SHOTS, 'inbox-page-empty.png'), fullPage: true })
   await expect.poll(async () => await page.locator('button[class*="inboxCard"]').getAttribute('aria-current')).toBe('page')
+
+  // Losing the Host connection surfaces the failure in two places, and both
+  // must read as states rather than as drift: the Channel body centers in the
+  // free space exactly like the loading and empty surfaces it replaces, and the
+  // rail line sits on the rail's alert scale, on the row labels, in the error
+  // colour. A failed load also never reads as an empty workspace.
+  await page.getByRole('button', { name: '新建频道' }).click()
+  const probeDialog = page.getByRole('dialog', { name: '新建频道' })
+  await probeDialog.getByLabel('名称').fill('recovery')
+  await probeDialog.getByLabel('说明').fill('disconnect probe')
+  await probeDialog.getByRole('button', { name: '创建频道' }).click()
+  const recoveryRow = page.getByRole('button', { name: '# recovery' })
+  await recoveryRow.waitFor()
+  // The row label sets the inset every line in the rail agrees with, so read it
+  // while the list is still there to read it from: a failed load leaves the rail
+  // with no rows at all, and the error line is what stands in their place.
+  const railLabel = await recoveryRow.locator('strong').evaluate(element => ({ x: element.getBoundingClientRect().x, color: getComputedStyle(element).color }))
+  // Cutting the network is this block's own doing, so the ordinary shell's
+  // connection-loss warnings from this window are acknowledged — and only those:
+  // gap-repair and discontinuity warnings stay fatal.
+  const offlineWarningStart = consoleWatch.warnings.length
+  await page.context().setOffline(true)
+  // A Channel whose projection was never loaded is the one that shows the
+  // whole-surface error state instead of a stale timeline.
+  await recoveryRow.click()
+  const channelSurface = page.locator('[data-team-channel]')
+  const bodyError = channelSurface.locator('[role="alert"]').first()
+  await bodyError.waitFor({ timeout: 30_000 })
+  const bodyBox = await bodyError.evaluate(element => {
+    const box = element.getBoundingClientRect()
+    const parent = element.parentElement!.getBoundingClientRect()
+    return { centerX: box.x + box.width / 2, centerY: box.y + box.height / 2, parentCenterX: parent.x + parent.width / 2, parentCenterY: parent.y + parent.height / 2 }
+  })
+  expect(Math.abs(bodyBox.centerY - bodyBox.parentCenterY)).toBeLessThanOrEqual(2)
+  expect(Math.abs(bodyBox.centerX - bodyBox.parentCenterX)).toBeLessThanOrEqual(2)
+  await settleAnimations(page)
+  await page.screenshot({ path: join(UI08_SHOTS, 'channel-error-offline.png'), fullPage: true })
+
+  // Rail Panels only re-subscribe when they remount, so leaving Team mode and
+  // returning is what makes the sideways surfaces report the same drop.
+  await page.getByRole('button', { name: '对话' }).click()
+  await page.getByRole('button', { name: '团队' }).click()
+  const railAlert = page.locator('section[aria-label="工作区"] [role="alert"]')
+  await railAlert.first().waitFor({ timeout: 30_000 })
+  const railBox = await railAlert.first().evaluate(element => {
+    const box = element.getBoundingClientRect()
+    const style = getComputedStyle(element)
+    return { x: box.x, inset: box.x + parseFloat(style.paddingLeft), fontSize: style.fontSize, marginTop: style.marginTop, marginBottom: style.marginBottom, color: style.color }
+  })
+  expect(railBox.x).toBeLessThan(300)
+  expect(railBox.fontSize).toBe('11px')
+  expect(railBox.marginTop).toBe('0px')
+  expect(railBox.marginBottom).toBe('0px')
+  expect(Math.abs(railBox.inset - railLabel.x)).toBeLessThanOrEqual(1)
+  expect(railBox.color).not.toBe(railLabel.color)
+  expect(await page.getByText('还没有频道').count()).toBe(0)
+  expect(await page.getByText('还没有 Agent').count()).toBe(0)
+  await settleAnimations(page)
+  await page.screenshot({ path: join(UI08_SHOTS, 'sidebar-error-offline.png'), fullPage: true })
+
+  // The Channel's own retry re-reads once the Host answers again…
+  await page.context().setOffline(false)
+  await channelSurface.locator('[role="alert"]').getByRole('button', { name: '重试' }).click()
+  await page.getByRole('heading', { name: '# recovery' }).waitFor({ timeout: 30_000 })
+  // …and the rail heals from the change stream alone: the retrying poll is
+  // answered again — the Host replies to a parked wait on its own deadline even
+  // with nothing committed — which drops the error line and brings back the rows
+  // it lost, with no second mode switch and no page reload.
+  await recoveryRow.waitFor({ timeout: 45_000 })
+  await expect.poll(async () => await railAlert.count(), { timeout: 20_000 }).toBe(0)
+  acknowledgeReloadConnectionLoss(consoleWatch, offlineWarningStart)
+  await settleAnimations(page)
+  await page.screenshot({ path: join(UI08_SHOTS, 'sidebar-recovered-online.png'), fullPage: true })
 
   // Keyboard path: the card is focusable and opens the page from the keyboard.
   await page.getByRole('button', { name: '# delivery' }).click()

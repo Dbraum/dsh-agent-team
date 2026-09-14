@@ -92,6 +92,12 @@ The row is a three-track grid — 24px avatar, `minmax(0, 1fr)` copy, `auto` act
 
 Membership law follows the Host: joining needs `availability === 'active'` (the Host refuses any other availability), while leaving needs only the membership fact, so an already-joined Member who is temporarily down keeps a working 移除. The sidebar Agent list is the exception on spelling: it names Members as the directory does (`builder`), while rosters address them the way the composer does (`@builder`).
 
+### Failure surfaces
+
+A failed projection renders one of two shapes, and the choice is a claim about what is still on screen. When nothing was ever loaded, the failure replaces the whole surface as `errorState`: it rides the same free space as the loading and empty surfaces it stands in for (`margin: auto`, `padding: 32px 0`), keeps to the 880px reading column, takes the 12px/18px error scale in `--dsw-alias-state-error-primary`, and carries the Host's message plus one `重试` that re-issues the read — message and retry inside a single `role="alert"`. When rows are still standing, the failure is the inline `error` line instead: `margin: 0` inside the content column, reading as the last line of the list it belongs to rather than re-centering a populated surface. Neither shape ever doubles as an empty state — an empty claim requires a successful projection that came back empty (`view !== undefined`, no error, nothing in it) — so a dropped connection cannot read as an empty workspace.
+
+The rail speaks the same two shapes at rail scale. A Panel's own failure line is 11px/16px in `--dsw-alias-state-error-primary`, inset 12px so its text lands on the row labels it replaces (list inset 4px + row inset 8px) rather than on the Panel edge; a row's own failure (`rowAlert`) keeps that scale inside the row. Panel failures stay per Panel: each mounted Panel reports the drop it saw, so one outage shows the same message on the rail and, where the body's own read failed, on the page too. A Panel's line carries no retry control; the rail heals from the change stream, which reports an outage once and wakes every listener when the transport answers again (see [`architecture.md`](architecture.md)).
+
 ## Timeline scrolling
 
 When the reader is within 48px of the bottom, follow new content; away from the bottom, do not disturb. Every arrival while a Thread is open is acknowledged durably right away, whether or not the reader is pinned — a scrolled-away reader gets only the pure “↓ N new update(s)” jump hint, which scrolls to the tail without any read semantics and clears when the reader returns to the bottom. Opening a Thread scrolls to the latest fact, and a bounded read with a remaining unread count continues automatically: a serial drain loop issues fresh-requestId reads until the remainder is zero (50-round cap surfaces an error). Compensate `scrollTop` by the `scrollHeight` delta when prepending history. Rendering keys change with facts; a current length plus last fact key is used.
@@ -130,7 +136,9 @@ Channel refreshes deduplicate by `messageRef`, merge new and loaded history thro
 
 ## Copy and localization
 
-All visible copy comes from structurally matching zh/en locale keys, whose types derive from zh. Parameter conventions are `{count}`, `{ids}`, `{kind}`, `{number}`, `{actor}`, and `{direction}`. Show raw Host error messages where useful, wrapped by locale-key copy.
+All visible copy comes from structurally matching zh/en locale keys, whose types derive from zh. Parameter conventions are `{count}`, `{ids}`, `{kind}`, `{number}`, `{actor}`, and `{direction}`. Error copy follows the Host: a refusal with a known remedy renders through locale-key copy (`staleRevision`, `memberNotFollowing`), while a failure the Client cannot word better — a dropped transport, for instance — shows the Host's own message verbatim.
+
+> TODO: decide whether a raw transport message should be replaced by localized copy or stay exactly as the Host worded it; today the surfaces show it verbatim.
 
 ## Accessibility baseline
 
@@ -145,3 +153,5 @@ npm run typecheck && npm test && npm run lint && npm run build && npm run test:b
 ```
 
 Thread-first changes additionally cover default taskless sends, default-off keyboard toggle, promotion Host reread, taskless gating, desktop, and 390×844. Routine screenshots stay in ignored `artifacts/browser/`; only a few acceptance images with a README belong in the archive. Behavior changes update this document in the same change; historical rationale belongs in `.scratch/archive/`.
+
+A CSS-module class the TSX names but the module does not define resolves to `undefined` and renders the element unstyled — silently, with no build, type, or test failure. When a rule's presence decides layout, verify the assembled bundle (a computed style, an offset, or the screenshot) rather than the TSX, and read a state that depends on it as an assertion, not as a comment.
