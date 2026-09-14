@@ -997,6 +997,9 @@ describe('AgentTeam durable Thread Attention ledger', () => {
     await expect(harness(storedPool(records))).rejects.toThrow(/invalid direct marker addition/)
   })
 
+  // The only case that boots two SQLite-backed Hosts over one file, so it pays
+  // cold start, a full replay and a validate twice. Windows runners vary from
+  // 465ms to over 5s on identical code, so it needs headroom over the default.
   it('replays an Agent Attention read watermark from SQLite across a Host restart', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agent-team-sqlite-'))
     cleanups.push(() => rm(root, { recursive: true, force: true }))
@@ -1019,7 +1022,7 @@ describe('AgentTeam durable Thread Attention ledger', () => {
     expect(replay.attentionStatus(actor, { workspaceId: alpha, taskRef: started.task.taskRef }).attention).toMatchObject({ readThroughSequence: update.thread.revision })
     replay.validate()
     second.ctx.agentTeam.validateLedger()
-  })
+  }, 30_000)
 
   it('normalizes bare pre-occurredAt messages with the wrapping operation instant during replay', async () => {
     const test = await harness()
