@@ -31,7 +31,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { formatTeamDuration, formatTeamTimestamp } from './time-format.ts'
+import { advanceSessionEventCursor, initSessionEventCursor, type SessionEventCursor, type SessionEventFold } from './session-event-cursor.ts'
 
 export const name = 'wowyuarm-agent-team-member-time-context'
 
@@ -117,8 +119,23 @@ export function renderClockSnapshot(input: { readonly now: number; readonly turn
     + 'Team collaboration timestamps use UTC+8. Sequence and revision, not wall-clock time, determine ordering and concurrency.'
 }
 
+/**
+ * The clock baseline folded incrementally over one Session's own events. A
+ * rollover starts a fresh Session log, and the cache below is keyed by Session
+ * id, so the fold never guesses elapsed across generations: a missing prior
+ * event renders `unavailable`, not a fabricated baseline.
+ */
+const CLOCK_FOLD: SessionEventFold<ClockBaseline, SessionEvent> = {
+  start: emptyBaseline(),
+  step: (state, event) => applyClockEvent(state, event),
+}
+
 export function apply(ctx: Context, config: Config = {}): void {
   const refreshIntervalMs = config.refreshIntervalMs ?? CLOCK_REFRESH_INTERVAL_MS
+  // Per-step fold state, reused for this plugin lifecycle. Entries are replaced
+  // when a Session id changes and dropped when the Session's log is longer than
+  // the cache, so the map holds one entry per live Session.
+  const cursors = new Map<string, SessionEventCursor<ClockBaseline>>()
   ctx.on('agent/pre-step', async ({ agent, turn, step, signal }, next): Promise<PreStepDecision> => {
     const decision = await next()
     if (decision.kind === 'reject' || signal.aborted) return decision
@@ -129,10 +146,13 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (host === undefined) return decision
     if ((host as { memberForAgent(subject: unknown): unknown }).memberForAgent(agent) === undefined) return decision
     const now = Date.now()
-    // A rollover starts a fresh Session log, so the fold never guesses
-    // elapsed across generations: a missing prior event renders
-    // `unavailable`, not a fabricated baseline.
-    const baseline = foldClockBaseline(agent.session.ownEvents())
+    const sessionId = agent.session.id
+    const events = agent.session.ownEvents()
+    const logFrom = agent.session.inheritedEventCount
+    const owned = cursors.get(sessionId) ?? initSessionEventCursor(CLOCK_FOLD, logFrom)
+    const advanced = advanceSessionEventCursor(owned, events, logFrom, logFrom + events.length, CLOCK_FOLD)
+    cursors.set(sessionId, advanced)
+    const baseline = advanced.value
     // Turn-first-step always samples; later steps sample only at the refresh
     // interval, so a quick tool-dense turn stays at one line.
     if (!shouldSampleClock(step, now, baseline, refreshIntervalMs)) return decision

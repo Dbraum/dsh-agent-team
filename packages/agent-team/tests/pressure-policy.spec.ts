@@ -3,8 +3,10 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { CONTEXT_WINDOW_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CompactionEngine, CompactionResult } from '@deepseek-ai/dsh-compaction'
-import { contextPressureNoticeText, PressurePolicyCoordinator } from '../src/pressure-policy.ts'
+import { contextPressureNoticeText, PRESSURE_NOTICE_FOLD, PressurePolicyCoordinator } from '../src/pressure-policy.ts'
 import { CONTEXT_PRESSURE_NOTICE_SUMMARY } from '../src/context-management.ts'
+import { AGENT_TEAM_PLUGIN_ID } from '../src/context-source.ts'
+import { advanceSessionEventCursor, initSessionEventCursor } from '../src/session-event-cursor.ts'
 
 /** One controllable fake agent exposing exactly what the policy reads. */
 function fakeAgent(options?: { readonly replaceGeneration?: number }): {
@@ -19,17 +21,27 @@ function fakeAgent(options?: { readonly replaceGeneration?: number }): {
   const steer = { messages: [] as unknown[] }
   const surface = { replaceGeneration: options?.replaceGeneration ?? 0 }
   let ownEvents: { type: string; data: { source?: { plugin?: string; summary?: string } } }[] = []
+  let generation = 0
   const agent = {
     id: 'session:test',
     ctx: { get: (name: string) => (name === 'tokenMeter' ? { measure: () => ({ totalTokens: 0 }) } : undefined) },
-    session: { surface, snapshotEvents: () => [], ownEvents: () => ownEvents },
+    session: {
+      surface,
+      snapshotEvents: () => [],
+      ownEvents: () => ownEvents,
+      inheritedEventCount: 0,
+      // A rollover starts a NEW Session; the id is what carries that, and it is
+      // the only thing that distinguishes a fresh generation from a rewritten
+      // log of the same length.
+      get id() { return `session:test-${generation}` },
+    },
     steer: (message: unknown) => {
       steer.messages.push(message)
       const source = (message as { source?: { plugin?: string; summary?: string } }).source
       if (source?.summary !== undefined) ownEvents.push({ type: 'user/message', data: { source } })
     },
   } as unknown as Agent
-  return { agent, steer, surface, ownEvents: ownEvents as never, newGeneration: () => { ownEvents = [] } }
+  return { agent, steer, surface, ownEvents: ownEvents as never, newGeneration: () => { ownEvents = []; generation += 1 } }
 }
 
 /** A configurable fake engine recording calls and advancing the surface. */
@@ -202,6 +214,34 @@ describe('Agent Team pressure policy (ticket 03)', () => {
     const { agent } = fakeAgent()
     const retry = await policy.onRequestError(agent, { code: CONTEXT_WINDOW_EXCEEDED_CODE }, new AbortController().signal)
     expect(retry).toBe(true)
+  })
+
+  it('the incremental notice fold agrees with a full scan at every log length', () => {
+    // The fold is monotone: a delivered notice latches, so an assertion that
+    // only ever sees `true` proves nothing about where it latched. This drives
+    // the fold from an empty log to the notice and compares against a cold
+    // scan at each step, which is the property the production cursor relies on.
+    const notice = { type: 'user/message', seq: 0, data: { source: { plugin: AGENT_TEAM_PLUGIN_ID, form: 'notice', summary: CONTEXT_PRESSURE_NOTICE_SUMMARY } } }
+    const plain = { type: 'tool/result', seq: 1, data: {} }
+    const spliced = { type: 'agent/inbox/spliced', seq: 2, data: { inserted: [{ source: { plugin: AGENT_TEAM_PLUGIN_ID, form: 'notice', summary: CONTEXT_PRESSURE_NOTICE_SUMMARY } }] } }
+
+    const cold = (events: readonly unknown[]): boolean => events.reduce<boolean>((state, event) => PRESSURE_NOTICE_FOLD.step(state, event as never), PRESSURE_NOTICE_FOLD.start)
+    expect(cold([])).toBe(false)
+
+    let cursor = initSessionEventCursor(PRESSURE_NOTICE_FOLD)
+    for (const events of [[plain], [plain, plain], [plain, plain, notice], [plain, plain, notice, plain], [plain, plain, notice, plain, spliced]] as unknown[][]) {
+      const advanced = advanceSessionEventCursor(cursor, events as never, 0, events.length, PRESSURE_NOTICE_FOLD)
+      expect(advanced.value).toBe(cold(events))
+      // The log is append-only, so the cursor must never restart on this path.
+      expect(advanced.foldedThrough).toBe(events.length)
+      cursor = advanced
+    }
+
+    // A queued splice alone is durable evidence too: the notice has not
+    // surfaced as a user message yet but is already delivered for this
+    // generation.
+    const queued = advanceSessionEventCursor(initSessionEventCursor(PRESSURE_NOTICE_FOLD), [plain, spliced] as never, 0, 2, PRESSURE_NOTICE_FOLD)
+    expect(queued.value).toBe(true)
   })
 
   it('the pressure notice text stays concise and covers limits, claims, jobs, and the default action', () => {

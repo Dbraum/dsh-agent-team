@@ -26,6 +26,7 @@ import type { SessionEvent, SessionHeader, SessionLogOffset } from '@deepseek-ai
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import type { AgentTeamContextCheckpointRef } from './types.ts'
 import { AGENT_TEAM_PLUGIN_ID, continuationCheckpointRefOf, handoffOf, isAgentTeamContextSource, isCheckpointContinuationMessage } from './context-source.ts'
+import type { SessionEventFold } from './session-event-cursor.ts'
 
 /** Summary marker of the pre-compaction memory hint. */
 const PRE_COMPACTION_NOTICE_SUMMARY = 'Compaction is imminent; consider persisting key conclusions.'
@@ -313,6 +314,17 @@ export function foldContextProjection(events: readonly SessionEvent[], inherited
   }
   return state
 }
+
+/**
+ * The same fold as {@link foldContextProjection}, as the `{ start, step }` pair
+ * the incremental Session cursor consumes. The cursor route and the cold fold
+ * therefore share one transition function: a Session's projection cannot
+ * depend on which of the two read it.
+ */
+export const contextProjectionFold = (sessionId: string): SessionEventFold<AgentTeamContextProjectionState, SessionEvent> => ({
+  start: emptyState(),
+  step: (state, event) => applyContextEvent(state, event, sessionId),
+})
 
 /**
  * The host-only projection unit; no wire view is published. The definition is

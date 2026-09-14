@@ -22,6 +22,25 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { AgentTeamMemberId } from './types.ts'
 import { CONTEXT_PRESSURE_NOTICE_SUMMARY } from './context-management.ts'
 import { AGENT_TEAM_PLUGIN_ID } from './context-source.ts'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { advanceSessionEventCursor, initSessionEventCursor, type SessionEventCursor, type SessionEventFold } from './session-event-cursor.ts'
+
+/**
+ * Whether this Session's own span already carries the pressure notice: either
+ * surfaced as a `user/message` or still queued in a durable
+ * `agent/inbox/spliced` insert. Expressed as a fold rather than a scan because
+ * the answer is monotone — once delivered it stays delivered for the
+ * generation — so the cursor only ever has to read events it has not seen.
+ */
+export const PRESSURE_NOTICE_FOLD: SessionEventFold<boolean, SessionEvent> = {
+  start: false,
+  step: (delivered, event) => {
+    if (delivered) return true
+    if (event.type === 'user/message' && isPressureNotice(event.data)) return true
+    if (event.type === 'agent/inbox/spliced' && event.data.inserted.some(isPressureNotice)) return true
+    return false
+  },
+}
 
 /** One pressure-notice text; concise, structured, and inside the reserve. */
 export function contextPressureNoticeText(input: {
@@ -72,6 +91,14 @@ export class PressurePolicyCoordinator {
    * Process-only by design: a restart re-earns one sequence per chain.
    */
   private readonly overflowRetries = new Map<Agent, number>()
+  /**
+   * Whether the one-shot notice was already delivered, folded incrementally per
+   * Member. The scan below is a monotone "has this ever happened" fold over the
+   * Session's own events, so a cursor can replace re-scanning the whole log on
+   * every step; identity guarding falls back to a cold fold when the Member's
+   * Session changed under the entry.
+   */
+  private readonly noticeSeen = new Map<AgentTeamMemberId, { readonly sessionId: string; readonly cursor: SessionEventCursor<boolean> }>()
   private disposed = false
 
   constructor(private readonly options: PressurePolicyOptions) {}
@@ -86,12 +113,17 @@ export class PressurePolicyCoordinator {
    * rollover starts a fresh Session whose own event span has no notice yet,
    * which is exactly the documented re-arm.
    */
-  private noticeDelivered(agent: Agent): boolean {
-    for (const event of agent.session.ownEvents()) {
-      if (event.type === 'user/message' && isPressureNotice(event.data)) return true
-      if (event.type === 'agent/inbox/spliced' && event.data.inserted.some(isPressureNotice)) return true
-    }
-    return false
+  private noticeDelivered(agent: Agent, memberId: AgentTeamMemberId): boolean {
+    const sessionId = agent.session.id
+    const cached = this.noticeSeen.get(memberId)
+    const events = agent.session.ownEvents()
+    const logFrom = agent.session.inheritedEventCount
+    const cursor = cached !== undefined && cached.sessionId === sessionId
+      ? cached.cursor
+      : initSessionEventCursor(PRESSURE_NOTICE_FOLD, logFrom)
+    const advanced = advanceSessionEventCursor(cursor, events, logFrom, logFrom + events.length, PRESSURE_NOTICE_FOLD)
+    this.noticeSeen.set(memberId, { sessionId, cursor: advanced })
+    return advanced.value
   }
 
   dispose(): void {
@@ -128,7 +160,7 @@ export class PressurePolicyCoordinator {
       const outcome = await this.enforceHardLimit(agent, member.memberId, member.sessionId, signal)
       return outcome ? { kind: 'continue' } : { kind: 'reject' }
     }
-    if (usageTokens >= handoffAt && !this.noticeDelivered(agent)) {
+    if (usageTokens >= handoffAt && !this.noticeDelivered(agent, member.memberId)) {
       const notice = createUserMessage({
         content: [{ type: 'text', text: contextPressureNoticeText({
           usageTokens, handoffAt, hardLimit,

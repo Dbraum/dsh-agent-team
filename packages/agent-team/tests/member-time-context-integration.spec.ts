@@ -18,7 +18,7 @@ const PLUGIN = memberTimeContext.name
 function fakeAgent(ctx: Context, events: unknown[] = []): Agent {
   return {
     id: SessionId('session:clock-test'), ctx, status: 'idle', options: { provider: 'mock', model: 'mock' },
-    session: { surface: { nodes: [] }, events, ownEvents: () => events } as never,
+    session: { surface: { nodes: [] }, events, ownEvents: () => events, inheritedEventCount: 0 } as never,
     inbox: {} as never,
     cancel() {}, whenIdle: async () => {}, runMaintenance: async task => task(new AbortController().signal),
     send() {}, followup() {}, steer() {}, inject() {},
