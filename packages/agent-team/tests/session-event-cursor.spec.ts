@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { advanceSessionEventCursor, cursorSubjectFor, initSessionEventCursor, type SessionCursorEvent, type SessionEventCursor, type SessionEventFold } from '../src/session-event-cursor.ts'
+import { advanceOwnedSessionEventCursor, advanceSessionEventCursor, initSessionEventCursor, type SessionCursorEvent, type SessionEventCursor, type SessionEventFold } from '../src/session-event-cursor.ts'
 
 /** Build the minimal cursor event shape; `payload` stands in for any event body. */
 function event(seq: number, type: string, payload = ''): SessionCursorEvent & { readonly payload: string } {
@@ -22,6 +22,16 @@ const seqFold: SessionEventFold<readonly number[], SessionCursorEvent & { readon
 /** Cold-fold a whole log: the reference result every incremental advance must match. */
 function coldFold(events: readonly (SessionCursorEvent & { readonly payload: string })[], logFrom = 0): readonly number[] {
   return advanceSessionEventCursor(initSessionEventCursor(seqFold, logFrom), events, logFrom, logFrom + events.length, seqFold).value
+}
+
+/**
+ * A fold whose value records the types it consumed. Unlike {@link seqFold},
+ * whose value is just the positions, this one can tell a resumed advance from a
+ * cold fold over the same slice.
+ */
+const typeFold: SessionEventFold<readonly string[], SessionCursorEvent & { readonly payload: string }> = {
+  start: [],
+  step: (state, cursorEvent) => [...state, cursorEvent.type],
 }
 
 /**
@@ -143,11 +153,51 @@ describe('session event cursor identity guard', () => {
   })
 })
 
-describe('cursorSubjectFor', () => {
-  it('returns the folded value only for the Session that produced the cursor', () => {
-    const cursor = initSessionEventCursor(seqFold)
-    expect(cursorSubjectFor(cursor, 'session-a', 'session-a')).toBe(cursor.value)
-    expect(cursorSubjectFor(cursor, 'session-b', 'session-a')).toBeUndefined()
-    expect(cursorSubjectFor(undefined, 'session-a', 'session-a')).toBeUndefined()
+describe('advanceOwnedSessionEventCursor', () => {
+  it('resumes the entry that still belongs to the same Session', () => {
+    const first = advanceOwnedSessionEventCursor(undefined, 'session-a', seqFold, logOf(5), 0)
+    expect(first.sessionId).toBe('session-a')
+    expect(first.cursor.value).toEqual([0, 1, 2, 3, 4])
+
+    const grown = logOf(7)
+    const second = advanceOwnedSessionEventCursor(first, 'session-a', seqFold, grown, 0)
+    // Resumed: exactly the two new events were folded, and the value still
+    // equals the cold fold of the same log.
+    expect(injected(first.cursor, second.cursor)).toEqual([5, 6])
+    expect(second.cursor.value).toEqual(coldFold(grown))
+  })
+
+  it('starts cold at the new log when the owner moved to another Session', () => {
+    // An adversarial pair: the new Session's log is long enough and its anchor
+    // position carries the same sequence and type, so the cursor's own guard
+    // would resume the predecessor happily. Only ownership refuses it, and the
+    // type-recording fold is what makes a resumed value differ from the cold
+    // one — a seq-recording fold would produce the same value either way.
+    const before = advanceOwnedSessionEventCursor(undefined, 'session-a', typeFold, logOf(5), 0)
+    expect(before.cursor.value).toEqual(Array.from({ length: 5 }, () => 'user/message'))
+
+    const mixed = [
+      event(0, 'assistant/message'), event(1, 'assistant/message'), event(2, 'assistant/message'),
+      event(3, 'assistant/message'), event(4, 'user/message'),
+      event(5, 'tool/result'), event(6, 'tool/result'),
+    ]
+    const cold = advanceSessionEventCursor(initSessionEventCursor(typeFold), mixed, 0, mixed.length, typeFold).value
+    const after = advanceOwnedSessionEventCursor(before, 'session-b', typeFold, mixed, 0)
+    expect(after.sessionId).toBe('session-b')
+    expect(after.cursor.value).toEqual(cold)
+    expect(after.cursor.foldedThrough).toBe(7)
+    // One entry per owner: the predecessor was replaced, not carried along.
+    expect(after.cursor.value).not.toEqual([...before.cursor.value, 'tool/result', 'tool/result'])
+  })
+
+  it('keeps the replacement from resuming when the Session id is unchanged but its cut moved', () => {
+    // A resumed Session can rebuild the same id over a log with a different
+    // inherited cut; ownership resumes it, and the cursor's own guard is what
+    // refuses the position.
+    const before = advanceOwnedSessionEventCursor(undefined, 'session-a', seqFold, logOf(6), 0)
+    const own = logOf(4, { from: 2 })
+    const after = advanceOwnedSessionEventCursor(before, 'session-a', seqFold, own, 2)
+    expect(after.cursor.value).toEqual(coldFold(own, 2))
+    expect(after.cursor.foldedThrough).toBe(6)
   })
 })

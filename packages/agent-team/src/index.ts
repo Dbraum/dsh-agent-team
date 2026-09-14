@@ -27,7 +27,7 @@ import { PressurePolicyCoordinator } from './pressure-policy.ts'
 import { ContextManagementCoordinator, type TransitionPlan } from './context-management.ts'
 import { AGENT_TEAM_PLUGIN_ID, createHandoffMessage } from './context-source.ts'
 import { carriedInputOf, checkpointByRef, checkpointRefFor, contextProjectionFold, foldContextProjection, isReminderNoticeSummary, timelineCandidates, type AgentTeamContextProjectionState, type TimelineCandidate } from './context-projection.ts'
-import { advanceSessionEventCursor, initSessionEventCursor, type SessionEventCursor } from './session-event-cursor.ts'
+import { advanceOwnedSessionEventCursor, type OwnedSessionEventCursor } from './session-event-cursor.ts'
 import { AGENT_TEAM_HUMAN_MEMBER_ID, AgentTeamLedger, agentTeamHumanActor, type AgentTeamDurableMemberResult } from './ledger.ts'
 import { AGENT_TEAM_TOOL_NAMES, deepCopyCapabilities, memberMemoryDirectoryName, MemberRuntime } from './member-runtime.ts'
 import { ProgressNudgeCoordinator } from './progress-nudge.ts'
@@ -408,10 +408,13 @@ export default class AgentTeam extends TypertRemoteService {
     log: message => { this.ctx.logger.warn(message) },
   })
   /**
-   * Incremental fold state for {@link contextManagement}'s projection lookup,
-   * one entry per Session now in use.
+   * Incremental fold state for {@link contextManagement}'s projection lookup:
+   * one entry per Member, replaced when that Member's Session changes. Keying
+   * by Member rather than by Session id is what bounds the map — a rollover
+   * that leaves the previous generation's projection behind retains it for the
+   * life of the process, and only the current Session can ever read it.
    */
-  private readonly contextCursors = new Map<string, SessionEventCursor<AgentTeamContextProjectionState>>()
+  private readonly contextCursors = new Map<AgentTeamMemberId, OwnedSessionEventCursor<AgentTeamContextProjectionState>>()
   /**
    * Context self-management: the one deep module that turns a Member's
    * successful `context_rollover` tool result into its next private context
@@ -427,20 +430,19 @@ export default class AgentTeam extends TypertRemoteService {
       if (handle === undefined || handle.agent.session.id !== sessionId) return undefined
       const session = handle.agent.session
       // The projection is read on every successful tool result and turn end, so
-      // it folds incrementally: the entry below is reused while this Session's
-      // log keeps growing, and a rewritten log falls back to a cold fold inside
-      // the cursor.
-      const fold = contextProjectionFold(session.id)
-      const events = session.ownEvents()
-      const logFrom = session.inheritedEventCount
-      // Keyed by Session id, which is what the cached fold was also built with:
-      // a rollover cannot resume from its predecessor's cursor, and an entry's
-      // step function always matches that entry's Session.
-      const cached = this.contextCursors.get(session.id)
-      const cursor = cached ?? initSessionEventCursor(fold, logFrom)
-      const advanced = advanceSessionEventCursor(cursor, events, logFrom, logFrom + events.length, fold)
-      this.contextCursors.set(session.id, advanced)
-      return advanced.value
+      // it folds incrementally. The entry is keyed by Member and carries the
+      // Session it was built from: this Session's log keeps growing, a rollover
+      // replaces the entry instead of resuming from its predecessor's cursor,
+      // and a rewritten log falls back to a cold fold inside the cursor.
+      const owned = advanceOwnedSessionEventCursor(
+        this.contextCursors.get(memberId),
+        session.id,
+        contextProjectionFold(session.id),
+        session.ownEvents(),
+        session.inheritedEventCount,
+      )
+      this.contextCursors.set(memberId, owned)
+      return owned.cursor.value
     },
     executeTransition: (memberId, plan) => this.executeMemberTransition(memberId, plan),
     log: message => { this.ctx.logger.warn(`agent-team: ${message}`) },

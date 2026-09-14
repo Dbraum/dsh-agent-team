@@ -23,7 +23,7 @@ import type { AgentTeamMemberId } from './types.ts'
 import { CONTEXT_PRESSURE_NOTICE_SUMMARY } from './context-management.ts'
 import { AGENT_TEAM_PLUGIN_ID } from './context-source.ts'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { advanceSessionEventCursor, initSessionEventCursor, type SessionEventCursor, type SessionEventFold } from './session-event-cursor.ts'
+import { advanceOwnedSessionEventCursor, type OwnedSessionEventCursor, type SessionEventFold } from './session-event-cursor.ts'
 
 /**
  * Whether this Session's own span already carries the pressure notice: either
@@ -98,7 +98,7 @@ export class PressurePolicyCoordinator {
    * every step; identity guarding falls back to a cold fold when the Member's
    * Session changed under the entry.
    */
-  private readonly noticeSeen = new Map<AgentTeamMemberId, { readonly sessionId: string; readonly cursor: SessionEventCursor<boolean> }>()
+  private readonly noticeSeen = new Map<AgentTeamMemberId, OwnedSessionEventCursor<boolean>>()
   private disposed = false
 
   constructor(private readonly options: PressurePolicyOptions) {}
@@ -114,16 +114,15 @@ export class PressurePolicyCoordinator {
    * which is exactly the documented re-arm.
    */
   private noticeDelivered(agent: Agent, memberId: AgentTeamMemberId): boolean {
-    const sessionId = agent.session.id
-    const cached = this.noticeSeen.get(memberId)
-    const events = agent.session.ownEvents()
-    const logFrom = agent.session.inheritedEventCount
-    const cursor = cached !== undefined && cached.sessionId === sessionId
-      ? cached.cursor
-      : initSessionEventCursor(PRESSURE_NOTICE_FOLD, logFrom)
-    const advanced = advanceSessionEventCursor(cursor, events, logFrom, logFrom + events.length, PRESSURE_NOTICE_FOLD)
-    this.noticeSeen.set(memberId, { sessionId, cursor: advanced })
-    return advanced.value
+    const owned = advanceOwnedSessionEventCursor(
+      this.noticeSeen.get(memberId),
+      agent.session.id,
+      PRESSURE_NOTICE_FOLD,
+      agent.session.ownEvents(),
+      agent.session.inheritedEventCount,
+    )
+    this.noticeSeen.set(memberId, owned)
+    return owned.cursor.value
   }
 
   dispose(): void {

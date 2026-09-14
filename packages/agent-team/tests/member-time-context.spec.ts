@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as memberTimeContext from '../src/member-time-context.ts'
+import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 
 /**
@@ -137,5 +138,64 @@ describe('shouldSampleClock gates snapshots to turn starts and refresh intervals
     const baseline = baselineAfter([clockSnapshot(10_000)])
     expect(memberTimeContext.shouldSampleClock(5, 10_000 + 29 * 60_000, baseline, interval)).toBe(false)
     expect(memberTimeContext.shouldSampleClock(5, 10_000 + 30 * 60_000, baseline, interval)).toBe(true)
+  })
+})
+
+/**
+ * The plugin's per-Step fold state is a cache, so this drives `apply` itself
+ * rather than the fold: the entry is keyed by Member and carries the Session it
+ * was built from, so a rollover must fold its own log cold instead of resuming
+ * whatever entry its predecessor left behind.
+ */
+describe('apply keeps one clock cursor per Member', () => {
+  interface StepPayload {
+    readonly agent: unknown
+    readonly turn: number
+    readonly step: number
+    readonly signal: { readonly aborted: boolean }
+  }
+  type Handler = (payload: StepPayload, next: () => Promise<PreStepDecision>) => Promise<PreStepDecision>
+
+  /** Mount the plugin on a stub Context and hand back its registered pre-step hook. */
+  function mount(): Handler {
+    let registered: Handler | undefined
+    const host = { memberForAgent: (subject: { readonly member: unknown }) => subject.member }
+    const ctx = {
+      get: (name: string) => (name === 'agentTeam' ? host : undefined),
+      on: (_event: string, callback: Handler) => { registered = callback },
+    }
+    memberTimeContext.apply(ctx as never)
+    if (registered === undefined) throw new Error('the clock plugin registered no agent/pre-step hook')
+    return registered
+  }
+
+  function agentOf(memberId: string, sessionId: string, events: readonly unknown[]): unknown {
+    return { member: { memberId }, session: { id: sessionId, ownEvents: () => events, inheritedEventCount: 0 } }
+  }
+
+  /** Run one turn-opening step and answer with the snapshot text it injected. */
+  async function snapshotOf(handler: Handler, agent: unknown, turn: number): Promise<string | undefined> {
+    // `next` resolves to the decision the step would enter with; the plugin
+    // prepends its snapshot to that decision's messages.
+    const decision = await handler({ agent, turn, step: 1, signal: { aborted: false } }, async () => ({ kind: 'enter', messages: [] }))
+    const content = decision.kind === 'enter' ? decision.messages[0]?.content[0] : undefined
+    return content !== undefined && content.type === 'text' ? content.text : undefined
+  }
+
+  it('folds a new generation cold instead of resuming the entry its predecessor left', async () => {
+    const handler = mount()
+    // Generation one's own log holds one clock snapshot from 1970, so its
+    // baseline answers with that distant span rather than with seconds.
+    const first = await snapshotOf(handler, agentOf('m1', 'session-1', [{ ...clockSnapshot(1_000), seq: 0 }]), 1)
+    expect(first).toMatch(/Elapsed since the preceding model-visible event: \d+d /)
+
+    // The same Member rolls over. The predecessor's anchor sits at the same
+    // position carrying the same type, so an entry resumed without checking the
+    // Session id would answer with generation one's distant span; folding this
+    // Session's own log answers with the ordinary message it does carry,
+    // seconds ago.
+    const agent = agentOf('m1', 'session-2', [{ ...ordinaryMessage(Date.now() - 5_000), seq: 0 }])
+    const second = await snapshotOf(handler, agent, 2)
+    expect(second).toMatch(/Elapsed since the preceding model-visible event: \d+s\./)
   })
 })

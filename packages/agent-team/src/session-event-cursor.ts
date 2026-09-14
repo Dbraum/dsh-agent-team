@@ -138,13 +138,39 @@ function anchorOf(event: SessionCursorEvent | undefined): { seq: number; type: s
 }
 
 /**
- * The Session projection a cursor is a fold of: its value when the Session id
- * still matches the one the cursor was built for, and `undefined` when it does
- * not. The id lives here rather than inside the cursor because the cursor is
- * Session-agnostic by design; threading the owner through this guard keeps one
- * Session's cursor from being read as another's.
+ * A cursor together with the Session it was folded from: the unit a cache
+ * keyed by owner stores.
+ *
+ * Keying by owner (a Member) rather than by Session id keeps the entry count
+ * bounded by the roster instead of by the number of generations, because a new
+ * Session replaces its predecessor's entry rather than adding another. The
+ * Session id kept beside the cursor is what stops that replacement from being
+ * read as a hit: a cursor is only ever resumed for the log it folded, and the
+ * id lives here rather than inside the cursor because the cursor is
+ * Session-agnostic by design.
  */
-export function cursorSubjectFor<S, T>(cursor: SessionEventCursor<S> | undefined, sessionId: T, ownerId: T | undefined): S | undefined {
-  if (cursor === undefined) return undefined
-  return sessionId === ownerId ? cursor.value : undefined
+export interface OwnedSessionEventCursor<S> {
+  readonly sessionId: string
+  readonly cursor: SessionEventCursor<S>
+}
+
+/**
+ * Advance one owner's fold and answer with the entry to store back, so every
+ * caller keeps the same one-entry-per-owner invariant.
+ *
+ * `events` is that Session's whole own-events slice starting at `logFrom` (its
+ * `inheritedEventCount`), so the slice's end is the log's end. The cursor is
+ * resumed only while `owned` still belongs to `sessionId`; every other case
+ * starts cold at `logFrom`, which is the same degradation the cursor's own
+ * guard performs for a rewritten log.
+ */
+export function advanceOwnedSessionEventCursor<S, E extends SessionCursorEvent>(
+  owned: OwnedSessionEventCursor<S> | undefined,
+  sessionId: string,
+  fold: SessionEventFold<S, E>,
+  events: readonly E[],
+  logFrom: number,
+): OwnedSessionEventCursor<S> {
+  const cursor = owned !== undefined && owned.sessionId === sessionId ? owned.cursor : initSessionEventCursor(fold, logFrom)
+  return { sessionId, cursor: advanceSessionEventCursor(cursor, events, logFrom, logFrom + events.length, fold) }
 }
