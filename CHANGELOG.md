@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and Semantic Versioning. Team bundle versions evolve independently of DeepSeek Harness versions; DeepSeek Harness compatibility is expressed through `peerDependencies` and [`docs/dsh-release-compatibility.md`](docs/dsh-release-compatibility.md).
 
+## [Unreleased]
+
+- The team-member persona is rewritten as flowing markdown: audience-and-channel routing, message shape, etiquette, and context discipline in one quality-first voice within the 10,000-character budget.
+
+- Decision requests no longer follow a fixed `Decision needed: X (default: Y)` template: a message that owes a decision says plainly what needs deciding and what happens by default if nobody answers.
+
+- The progress-nudge system is removed: no more 20/40/60-call Thread progress reminders and no more 5-call Claim suggestions. Session logs recorded before the removal still fold correctly.
+
 ## [0.1.11] - 2026-09-14
 
 - The Human Team gains a `Mentions of me` Inbox that gathers unread mentions from every Workspace into one list.

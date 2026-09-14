@@ -30,7 +30,6 @@ import { carriedInputOf, checkpointByRef, checkpointRefFor, contextProjectionFol
 import { advanceOwnedSessionEventCursor, type OwnedSessionEventCursor } from './session-event-cursor.ts'
 import { AGENT_TEAM_HUMAN_MEMBER_ID, AgentTeamLedger, agentTeamHumanActor, type AgentTeamDurableMemberResult } from './ledger.ts'
 import { AGENT_TEAM_TOOL_NAMES, deepCopyCapabilities, memberMemoryDirectoryName, MemberRuntime } from './member-runtime.ts'
-import { ProgressNudgeCoordinator } from './progress-nudge.ts'
 import type { MemberSkillSelectionRef } from './member-skills.ts'
 import { classifyRecoverableError, RecoveryCoordinator, RECOVERY_MAX_CONSECUTIVE_ERRORS } from './recovery.ts'
 import { SessionRemediation, handoffAlreadyInLog } from './session-remediation.ts'
@@ -393,21 +392,6 @@ export default class AgentTeam extends TypertRemoteService {
     },
   })
   /**
-   * Advisory progress-visibility nudges. Purely in-process: the ledger owns
-   * eligibility, this coordinator owns counting and notices, and neither ever
-   * writes Team facts. See docs/team-collaboration.md for the regimes.
-   */
-  private readonly progressNudge = new ProgressNudgeCoordinator({
-    agentForMember: memberId => this.handles.get(memberId)?.agent,
-    targetsForMember: memberId => this.requireLedger().progressNudgeTargets(memberId),
-    sessionLogForMember: (memberId, sessionId) => {
-      const handle = this.handles.get(memberId)
-      if (handle === undefined || handle.agent.session.id !== sessionId) return undefined
-      return { events: handle.agent.session.ownEvents() }
-    },
-    log: message => { this.ctx.logger.warn(message) },
-  })
-  /**
    * Incremental fold state for {@link contextManagement}'s projection lookup:
    * one entry per Member, replaced when that Member's Session changes. Keying
    * by Member rather than by Session id is what bounds the map — a rollover
@@ -521,20 +505,18 @@ export default class AgentTeam extends TypertRemoteService {
         this.emitPresenceChanged(member.workspaceId)
       }
     })
-    // Progress nudges count every `tool/call` of each Member Session. The
-    // store's dispatch carrier is untagged, so a scope-tagged listener inside
-    // the Agent setup would receive nothing; one root listener that maps the
-    // session id back to its Member is the seam that works (same shape as the
-    // `agent/status` listener above). The first turn of a freshly published
-    // Member cannot race this: `handles.set()` precedes the same activation
-    // continuation that publishes the Agent, so by the time any tool call
-    // streams, the map lookup succeeds.
+    // The store's dispatch carrier is untagged, so a scope-tagged listener
+    // inside the Agent setup would receive nothing; one root listener that
+    // maps the session id back to its Member is the seam that works (same
+    // shape as the `agent/status` listener above). The first turn of a
+    // freshly published Member cannot race this: `handles.set()` precedes the
+    // same activation continuation that publishes the Agent, so by the time
+    // any tool call streams, the map lookup succeeds.
     this.ctx.on('session/event', (session, event) => {
       const memberId = this.memberBySessionId.get(session.id)
       if (memberId === undefined) return
       const handle = this.handles.get(memberId)
       if (handle === undefined || handle.agent.session.id !== session.id) return
-      this.progressNudge.onSessionEvent(memberId, session.id, handle.agent, event)
       // A successful assistant response ends any open provider-overflow
       // recovery sequence for this Member.
       if (event.type === 'assistant/message') this.pressurePolicy.onAssistantMessage(handle.agent)
@@ -547,7 +529,6 @@ export default class AgentTeam extends TypertRemoteService {
       this.accepting = false
       this.remediation = undefined
       this.recovery.dispose()
-      this.progressNudge.dispose()
       this.contextManagement.dispose()
       this.pressurePolicy.dispose()
       if (this.attachmentGcTimer !== undefined) clearInterval(this.attachmentGcTimer)
@@ -875,9 +856,6 @@ export default class AgentTeam extends TypertRemoteService {
     // Drop the old handle's transient state: pending recovery episodes and
     // error markers belong to the disposed agent, not to the Member.
     this.recovery.stopTracking(memberId)
-    // The fresh Session may re-earn one Claim suggestion per Thread; the
-    // old Session's one-shot records must not leak into it.
-    this.progressNudge.stopTracking(memberId)
     // The context admission gate stays armed through disposal: input racing
     // the retire window must still be captured for the new generation, and
     // the coordinator drops its own bookkeeping only after the swap settles.
@@ -1020,9 +998,6 @@ export default class AgentTeam extends TypertRemoteService {
     for (const pending of [...handle.agent.inbox.nextStep, ...handle.agent.inbox.nextTurn]) {
       if (this.isInboxNotice(pending)) handle.agent.inbox.remove(pending.id)
     }
-    // Recovery carries the concrete interrupted work; a queued progress nudge
-    // is stale next to it and must not survive as a second reminder.
-    this.progressNudge.revokePendingNotice(member.memberId)
     handle.agent.steer(hint)
   }
 
@@ -1941,8 +1916,9 @@ export default class AgentTeam extends TypertRemoteService {
       } else if (event.type === 'user/message') {
         const source = event.data.source as { kind?: string; plugin?: string; form?: string; summary?: string } | undefined
         if (source?.kind !== 'plugin') continue
-        // Reminder notices never enter attribution — a progress nudge or a
-        // recovery instruction is not a Team fact.
+        // Reminder notices never enter attribution — a recovery instruction
+        // (or a historical progress-nudge notice, kept decodable in session
+        // logs recorded before that system was removed) is not a Team fact.
         if (source.form === 'notice' && source.summary !== undefined && isReminderNoticeSummary(source.summary)) continue
         const text = event.data.content.filter(block => block.type === 'text').map(block => block.text ?? '').join('\n')
         for (const match of text.matchAll(/Thread: (thread:[0-9a-f-]{6,})/g)) {
@@ -2558,10 +2534,6 @@ export default class AgentTeam extends TypertRemoteService {
     }
     const ledger = this.requireLedger()
     this.emitChanged(ledger.changeScopesOf(operation))
-    // Nudge reconciliation precedes notifyMember: a committed reply both
-    // resets the author's silence and cancels any of its queued nudge before
-    // the Inbox notice (higher priority) is considered.
-    this.progressNudge.onCommitted(operation)
     for (const memberId of ledger.affectedMembersOf(operation)) {
       const handle = this.handles.get(memberId)
       if (handle !== undefined) this.notifyMember(handle.agent)
@@ -2637,9 +2609,6 @@ export default class AgentTeam extends TypertRemoteService {
     }
     const existingInboxHint = pending.find(message => this.isInboxNotice(message))
     if (existingInboxHint !== undefined) agent.inbox.remove(existingInboxHint.id)
-    // A durable Inbox notice outranks a queued progress nudge; revoke it so
-    // the model reads concrete unread work instead of a generic reminder.
-    this.progressNudge.revokePendingNotice(member.memberId)
     const hint = createUserMessage({
       content: [{ type: 'text', text: this.notificationText(notifications, member.memberId) }],
       source: { kind: 'plugin', plugin: AGENT_TEAM_PLUGIN_ID, form: 'notice', summary: INBOX_NOTICE_SUMMARY },
@@ -2777,7 +2746,6 @@ export default class AgentTeam extends TypertRemoteService {
 
   private clearMemberRecoveryState(member: Pick<AgentTeamAgentMember, 'memberId' | 'sessionId'>): void {
     this.recovery.stopTracking(member.memberId)
-    this.progressNudge.stopTracking(member.memberId)
     this.clearMemberFailure(member.memberId, 'runtime')
     this.clearMemberNotificationState(member.memberId)
   }

@@ -28,8 +28,11 @@ async function shippedHarnessName(): Promise<string> {
 // The persona is injected into every Member turn and ships to every user, so its
 // size is a reviewed budget rather than a measurement: raising this number is a
 // deliberate act in the same change that edits the text. Silent accretion is what
-// this test exists to stop.
-const PERSONA_CHARACTER_BUDGET = 8889
+// this test exists to stop. The 2026-09-14 markdown rewrite (communication
+// discipline, Decision-needed template removed, progress nudges deleted in the
+// same change) moved the reviewed size up once, with headroom for wording that
+// earns its characters.
+const PERSONA_CHARACTER_BUDGET = 10000
 
 // The YAML block-scalar bodies under `prefix:`/`suffix:`, de-indented the way YAML
 // reads them. The block ends at the first line that is not more indented than its
@@ -153,13 +156,13 @@ describe('Agent Team shipping contract', () => {
     expect(preset).toContain('not a reply channel for it')
     // The message contract is conclusion-first with one mention rule: the
     // Human is mentioned exactly when they must know or decide (that mention
-    // is the Human's notification), the opening stays one to three readable
-    // sentences with a stated default, and mechanical detail moves below the
-    // conclusion rather than being dropped.
+    // is the Human's notification), a decision owed states what needs
+    // deciding and the default in plain words (no fixed template), and
+    // mechanical detail moves below the conclusion rather than being dropped.
     expect(preset).toContain('Lead with the conclusion or state; put mechanical detail')
     expect(preset).toContain('never drop detail a peer Member needs, move it below')
     expect(preset).toContain('mention the Human — that is how they are notified')
-    expect(preset).toContain('keep the opening to one to three readable sentences')
+    expect(preset).toContain('what needs deciding and what happens by default')
     // The persona keeps only the physical facts of the private space
     // (absolute paths, memory/notes discipline, reusable-assets boundary);
     // skill craft itself lives in the bundled member-skill-manager and its
@@ -259,8 +262,8 @@ describe('Agent Team Member persona', () => {
       'never a double colon',
       // Work on a Task is announced with a Claimed direction before it starts.
       'Claim a Direction',
-      // A decision owed to the Human states a default.
-      'Decision needed:',
+      // A decision owed states what needs deciding and the default outcome.
+      'what needs deciding and what happens by default',
     ]) {
       expect(persona, `the Member persona no longer carries the "${rule}" rule`).toContain(rule)
     }

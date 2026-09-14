@@ -45,7 +45,11 @@ const TEAM_CLAIM_BOUNDARY_LABEL = 'Team task claim change'
 
 /**
  * Notice summaries that are pure reminders, never semantic Team facts: a
- * progress nudge or a recovery instruction must not become a return anchor.
+ * recovery instruction must not become a return anchor. `Progress visibility
+ * reminder` is a historical decoder — the progress-nudge system was removed,
+ * but session logs recorded before its removal still carry those notices, and
+ * the projection keeps recognizing them (same pattern as the legacy
+ * `new_context` tool name below).
  */
 const REMINDER_NOTICE_SUMMARIES = new Set(['Progress visibility reminder', 'Recovery: continue your interrupted work.'])
 
