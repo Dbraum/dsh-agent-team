@@ -125,4 +125,63 @@ describe('TeamChangeStream', () => {
     await vi.waitFor(() => expect(changes.mock.calls.length).toBeGreaterThanOrEqual(3))
     expect(next).not.toHaveBeenCalled()
   })
+
+  it('resumes a re-subscribed scope from its last observed version', async () => {
+    let domain = 5
+    const calls: FakeCall[] = []
+    // The Host answers a cursor that sits behind its domain value at once and
+    // parks one that already equals it.
+    const changes = vi.fn((request: { afterVersion: number; scope?: unknown }, signal: AbortSignal) => {
+      calls.push({ request, signal })
+      return request.afterVersion === domain
+        ? new Promise<never>(() => {}) as never
+        : Promise.resolve({ ok: true as const, value: { version: domain } })
+    })
+    const stream = new TeamChangeStream(changes as never)
+    const scope = { kind: 'thread' as const, threadRef: 'thread:1' as never }
+    const first = vi.fn()
+    const disposeFirst = stream.subscribe(scope, first)
+    await vi.waitFor(() => expect(calls.length).toBe(2))
+    expect(calls.map(call => call.request.afterVersion)).toEqual([0, 5])
+    expect(first).not.toHaveBeenCalled()
+    disposeFirst()
+
+    // A commit lands while this scope has no poll at all — the window a page
+    // leaving the Thread and returning to it opens.
+    domain = 9
+    const second = vi.fn()
+    stream.subscribe(scope, second)
+    // The replacement poll opens at the last observed version rather than
+    // sampling the domain again, so the commit it missed is a difference it
+    // reports; a fresh sample would have swallowed it until the next commit.
+    await vi.waitFor(() => expect(calls.map(call => call.request.afterVersion)).toEqual([0, 5, 5, 9]))
+    expect(second).toHaveBeenCalledWith({ type: 'changed', version: 9 })
+    expect(first).not.toHaveBeenCalled()
+  })
+
+  it('keeps a re-subscribed scope silent and unpolled while nothing changed', async () => {
+    const domain = 4
+    const calls: FakeCall[] = []
+    const changes = vi.fn((request: { afterVersion: number; scope?: unknown }, signal: AbortSignal) => {
+      calls.push({ request, signal })
+      return request.afterVersion === domain
+        ? new Promise<never>(() => {}) as never
+        : Promise.resolve({ ok: true as const, value: { version: domain } })
+    })
+    const stream = new TeamChangeStream(changes as never)
+    const scope = { kind: 'workspace' as const, workspaceId: 'w1' as WorkspaceId }
+    const listener = vi.fn()
+    const dispose = stream.subscribe(scope, listener)
+    await vi.waitFor(() => expect(calls.length).toBe(2))
+    dispose()
+
+    const next = vi.fn()
+    stream.subscribe(scope, next)
+    await vi.waitFor(() => expect(calls.length).toBe(3))
+    // The resumed poll parks on the version it already observed: no second
+    // sample, no extra fetch, and no wake for a scope that did not move.
+    expect(calls[2]!.request).toEqual({ afterVersion: 4, scope })
+    expect(next).not.toHaveBeenCalled()
+    expect(listener).not.toHaveBeenCalled()
+  })
 })

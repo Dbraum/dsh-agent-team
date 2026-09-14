@@ -24,6 +24,8 @@ function scopeKey(scope: TeamChangeScope): string {
 interface ScopePoll {
   readonly controller: AbortController
   readonly listeners: Set<TeamChangeListener>
+  /** The version to open this poll at, from the scope's last observation. */
+  readonly resumeFrom: number | undefined
 }
 
 /**
@@ -38,6 +40,12 @@ interface ScopePoll {
  */
 export class TeamChangeStream {
   private readonly polls = new Map<string, ScopePoll>()
+  /**
+   * The last version each scope key answered with, kept after that scope's poll
+   * is torn down: a commit landing while no poll exists is otherwise folded into
+   * the replacement poll's opening sample, which reports nothing.
+   */
+  private readonly observed = new Map<string, number>()
 
   constructor(private readonly changes: ChangesFn) {}
 
@@ -45,7 +53,7 @@ export class TeamChangeStream {
     const key = scopeKey(scope)
     let poll = this.polls.get(key)
     if (poll === undefined) {
-      poll = { controller: new AbortController(), listeners: new Set() }
+      poll = { controller: new AbortController(), listeners: new Set(), resumeFrom: this.observed.get(key) }
       this.polls.set(key, poll)
       void this.run(key, scope, poll)
     }
@@ -63,15 +71,24 @@ export class TeamChangeStream {
   private async run(key: string, scope: TeamChangeScope, poll: ScopePoll): Promise<void> {
     const { signal } = poll.controller
     const request = (afterVersion: number): AgentTeamChangesRequest => ({ afterVersion, ...(scope === undefined ? {} : { scope }) })
-    // Sample the current version silently first: subscribers just fetched
-    // their initial projection, and an immediate wake would double-fetch.
-    const probe = await this.changes(request(0), signal)
-    if (signal.aborted) return
-    if (!probe.ok) {
-      this.fail(key, poll, probe.error.message)
-      return
+    let version = poll.resumeFrom
+    if (version === undefined) {
+      // Nothing has been observed for this scope yet, so there is no cursor to
+      // resume from: sample the current version silently, because the
+      // subscribers just fetched their initial projection and an immediate wake
+      // would double-fetch. This leaves one named gap — a commit landing between
+      // that initial fetch being processed and this sample being answered is
+      // missed until the next commit in the scope — which resuming from a known
+      // version closes for every later subscription.
+      const probe = await this.changes(request(0), signal)
+      if (signal.aborted) return
+      if (!probe.ok) {
+        this.fail(key, poll, probe.error.message)
+        return
+      }
+      version = probe.value.version
+      this.observed.set(key, version)
     }
-    let version = probe.value.version
     while (!signal.aborted) {
       const result = await this.changes(request(version), signal)
       if (signal.aborted) return
@@ -79,6 +96,7 @@ export class TeamChangeStream {
         this.fail(key, poll, result.error.message)
         return
       }
+      this.observed.set(key, result.value.version)
       // Any difference is a resolution in this scope's own cursor domain —
       // normally growth, but a cursor left over from another domain (the two
       // scopes count different things) or from an earlier Host lifetime can sit
