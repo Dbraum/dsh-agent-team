@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { IconUserOutline16, Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TeamFooterProps } from './slots.ts'
-import { TeamPresenceDot } from './TeamPresenceDot.tsx'
+import { TeamMemberRow } from './TeamMemberRow.tsx'
 import membersCss from './members.module.css'
 import css from './team.module.css'
 
@@ -49,12 +49,7 @@ export function TeamMembersAction({ wide, loadMemberGroups, t }: TeamMembersActi
           {!loading && groups.map(group => (
             <section className={membersCss.group} key={group.workspaceId} aria-labelledby={`team-members-${group.workspaceId}`}>
               <h3 id={`team-members-${group.workspaceId}`}>{group.workspaceTitle}</h3>
-              {group.members.map(status => (
-                <div className={membersCss.member} key={status.member.memberId}>
-                  <TeamPresenceDot status={status} t={t} />
-                  <span className={membersCss.copy}><strong>@{status.member.handle}</strong><small>{status.member.description}</small></span>
-                </div>
-              ))}
+              {group.members.map(status => <TeamMemberRow key={status.member.memberId} status={status} className={membersCss.member} t={t} />)}
             </section>
           ))}
           {error !== undefined && <p className={membersCss.error} role="alert">{error}</p>}

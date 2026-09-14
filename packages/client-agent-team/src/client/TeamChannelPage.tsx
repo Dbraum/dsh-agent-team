@@ -8,7 +8,7 @@ import type { TeamConversationProps } from './slots.ts'
 import { mintRequestId, uploadComposerFiles } from './requests.ts'
 import type { TeamDraftKey, TeamDraftStore } from './drafts.ts'
 import { TeamComposer } from './TeamComposer.tsx'
-import { TeamPresenceDot } from './TeamPresenceDot.tsx'
+import { TeamMemberRow } from './TeamMemberRow.tsx'
 import { TeamMessage } from './TeamMessage.tsx'
 import { TeamRunDivider } from './TeamRunDivider.tsx'
 import { formatTaskStatus, taskStatusDot, mentionNamesOf } from './team-formatters.ts'
@@ -316,14 +316,22 @@ export function TeamChannelPage({ workspaceId, channelRef, loadChannels, subscri
         {members.filter(status => status.member.state !== 'inactive' && status.member.state !== 'archived').map(status => {
           const joined = channelMemberIds.has(status.member.memberId)
           const rowPending = membership.pending.has(status.member.memberId)
-          const disabled = rowPending || (!joined && status.presence === 'unavailable')
+          // Joining needs an active Member — the Host refuses any other
+          // availability. Leaving only needs the Membership fact, so removal
+          // stays offered while a joined Member is down.
+          const disabled = rowPending || (!joined && status.availability !== 'active')
           const rowError = membership.errors.get(status.member.memberId)
-          return <div className={channelCss.memberRow} key={status.member.memberId}>
-            <TeamPresenceDot status={status} t={t} />
-            <span className={channelCss.memberCopy}><strong>@{status.member.handle}</strong><small>{status.member.description}</small></span>
-            <Button className={channelCss.memberAction} size="sm" disabled={disabled} onClick={() => { void membership.change({ workspaceId, channelRef, memberId: status.member.memberId, joined }) }}>{rowPending ? t('membershipUpdating') : joined ? t('removeFromChannel') : t('addToChannel')}</Button>
-            {rowError !== undefined && <p className={channelCss.memberError} role="alert">{rowError}</p>}
-          </div>
+          return <TeamMemberRow
+            key={status.member.memberId}
+            status={status}
+            action={{
+              label: rowPending ? t('membershipUpdating') : joined ? t('removeFromChannel') : t('addToChannel'),
+              disabled,
+              onSelect: () => { void membership.change({ workspaceId, channelRef, memberId: status.member.memberId, joined }) },
+            }}
+            {...(rowError === undefined ? {} : { error: rowError })}
+            t={t}
+          />
         })}
       </div>
     </Modal>

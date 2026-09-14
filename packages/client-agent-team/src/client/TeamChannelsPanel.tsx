@@ -13,6 +13,7 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/clie
 import { Button, IconArchiveOutline20, IconEditOutline16, IconPlusOutline16, Input, Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TeamSidebarProps } from './slots.ts'
 import { TeamPresenceDot } from './TeamPresenceDot.tsx'
+import { TeamMemberRow } from './TeamMemberRow.tsx'
 import { MultiMenuField } from './multi-menu-field.tsx'
 import { SortableRow, useSidebarRowDrag } from './sidebar-drag.tsx'
 import { moveSidebarItem, useSidebarOrder } from './sidebar-order.ts'
@@ -400,14 +401,21 @@ function ChannelEditorDialog({ channel, members, joinedIds, updateChannel, joinC
           {members.map(status => {
             const joined = joinedIds.has(status.member.memberId)
             const rowPending = membership.pending.has(status.member.memberId)
-            const disabled = rowPending || (!joined && status.presence === 'unavailable')
+            // Same membership law as the Channel page roster: joining needs an
+            // active Member, leaving only needs the fact.
+            const disabled = rowPending || (!joined && status.availability !== 'active')
             const rowError = membership.errors.get(status.member.memberId)
-            return <div className={css.editMemberRow} key={status.member.memberId}>
-              <TeamPresenceDot status={status} t={t} />
-              <span className={css.editMemberCopy}><strong>@{status.member.handle}</strong><small>{status.member.description}</small></span>
-              <Button size="sm" variant="outline" disabled={disabled} onClick={() => { void membership.change({ workspaceId: channel.workspaceId, channelRef: channel.channelRef, memberId: status.member.memberId, joined }) }}>{rowPending ? t('membershipUpdating') : joined ? t('removeFromChannel') : t('addToChannel')}</Button>
-              {rowError !== undefined && <p className={css.rowError} role="alert">{rowError}</p>}
-            </div>
+            return <TeamMemberRow
+              key={status.member.memberId}
+              status={status}
+              action={{
+                label: rowPending ? t('membershipUpdating') : joined ? t('removeFromChannel') : t('addToChannel'),
+                disabled,
+                onSelect: () => { void membership.change({ workspaceId: channel.workspaceId, channelRef: channel.channelRef, memberId: status.member.memberId, joined }) },
+              }}
+              {...(rowError === undefined ? {} : { error: rowError })}
+              t={t}
+            />
           })}
         </fieldset>
         {error !== undefined && <p className={createCss.error} role="alert">{error}</p>}

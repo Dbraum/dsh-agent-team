@@ -151,7 +151,7 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   const joinEditor = page.getByRole('dialog', { name: '编辑频道' })
   await joinEditor.waitFor()
   for (const handle of ['builder', 'reviewer']) {
-    const row = joinEditor.locator('[class*="editMemberRow"]').filter({ hasText: `@${handle}` })
+    const row = joinEditor.locator('[data-team-member-row]').filter({ hasText: `@${handle}` })
     // rc.1: member activation lands asynchronously (handle-based persistence
     // + async AgentLoop create); the roster can briefly show the new member
     // as unavailable before its handle registers.
@@ -178,6 +178,28 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   await page.keyboard.press('Escape')
   await page.setViewportSize({ width: 1440, height: 960 })
   await expect.poll(() => page.getByLabel('可用').count(), { timeout: 20_000 }).toBeGreaterThanOrEqual(2)
+  // The Agent list seats the shared Member identity in the row's second track.
+  // A centred or over-wide identity walks the avatar right and pushes the row
+  // past the sidebar; both are invisible to a hover-only glance, so they are
+  // pinned here at the settled desktop width.
+  const agentRowBoxes = await page.locator('[data-agent-row]').evaluateAll(rows => rows.map(row => {
+    const select = row.querySelector('button')
+    const avatar = row.querySelector('[role="img"]')
+    const handle = row.querySelector('strong')
+    const padding = select === null ? 0 : Number.parseFloat(getComputedStyle(select).paddingLeft)
+    return {
+      avatarInset: avatar === null || select === null ? -1 : Math.round(avatar.getBoundingClientRect().left - select.getBoundingClientRect().left),
+      handleGap: avatar === null || handle === null ? -1 : Math.round(handle.getBoundingClientRect().left - avatar.getBoundingClientRect().right),
+      rowOverflow: Math.round(row.getBoundingClientRect().right - (row.parentElement?.getBoundingClientRect().right ?? 0)),
+      padding,
+    }
+  }))
+  expect(agentRowBoxes.length).toBeGreaterThanOrEqual(2)
+  for (const box of agentRowBoxes) {
+    expect(Math.abs(box.avatarInset - box.padding)).toBeLessThanOrEqual(1)
+    expect(box.handleGap).toBeGreaterThanOrEqual(6)
+    expect(box.rowOverflow).toBeLessThanOrEqual(0)
+  }
   await page.screenshot({ path: join(UI02_SHOTS, 'sidebar-agents.png'), fullPage: true })
 
   await page.getByRole('button', { name: '新建频道' }).click()
@@ -651,8 +673,49 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   expect(channelGeometry[1]!.height).toBeGreaterThan(200)
   await page.screenshot({ path: join(UI01_SHOTS, 'desktop-channel.png'), fullPage: true })
   await page.getByRole('button', { name: '管理成员' }).click()
-  await page.getByRole('dialog', { name: '频道成员' }).waitFor()
+  const channelMembersDialog = page.getByRole('dialog', { name: '频道成员' })
+  await channelMembersDialog.waitFor()
+  // The roster is the shared Member row: identity avatar, handle over its
+  // description, and one 28px membership action per row. The guards below pin
+  // that geometry — a row that silently loses its avatar, lets the copy
+  // overflow its grid, or drops the 12/11px type steps is the regression this
+  // surface keeps regrowing.
+  const rosterRows = await channelMembersDialog.locator('[data-team-member-row]').evaluateAll(rows => rows.map(row => {
+    const avatar = row.querySelector('[role="img"]')
+    const handle = row.querySelector('strong')
+    const description = row.querySelector('small')
+    const action = row.querySelector('button')
+    return {
+      height: Math.round(row.getBoundingClientRect().height),
+      avatarWidth: avatar === null ? 0 : Math.round(avatar.getBoundingClientRect().width),
+      handle: handle?.textContent ?? '',
+      handleSize: handle === null ? undefined : getComputedStyle(handle).fontSize,
+      handleWeight: handle === null ? undefined : getComputedStyle(handle).fontWeight,
+      descriptionSize: description === null ? undefined : getComputedStyle(description).fontSize,
+      copyFits: description === null || description.parentElement === null
+        ? false : description.parentElement.scrollWidth <= description.parentElement.clientWidth,
+      actionWidth: action === null ? 0 : Math.round(action.getBoundingClientRect().width),
+      actionHeight: action === null ? 0 : Math.round(action.getBoundingClientRect().height),
+    }
+  }))
+  expect(rosterRows.length).toBeGreaterThanOrEqual(2)
+  for (const row of rosterRows) {
+    expect(row.avatarWidth).toBe(24)
+    expect(row.height).toBeGreaterThanOrEqual(40)
+    expect(row.handle.startsWith('@')).toBe(true)
+    expect(row.handleSize).toBe('12px')
+    expect(row.handleWeight).toBe('500')
+    expect(row.descriptionSize).toBe('11px')
+    expect(row.copyFits).toBe(true)
+    expect(row.actionWidth).toBeGreaterThanOrEqual(64)
+    expect(row.actionHeight).toBe(28)
+  }
   await page.screenshot({ path: join(UI04_SHOTS, 'channel-members-modal.png'), fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect.poll(async () => (await channelMembersDialog.boundingBox())?.width ?? 999).toBeLessThanOrEqual(390)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await page.screenshot({ path: join(UI04_SHOTS, 'channel-members-modal-narrow.png'), fullPage: true })
+  await page.setViewportSize({ width: 1440, height: 960 })
   await page.getByRole('button', { name: '关闭', exact: true }).click()
   await page.setViewportSize({ width: 390, height: 844 })
   const narrowChannelFrame = page.locator('[data-sidebar-collapsed="true"]')
@@ -1102,6 +1165,22 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   const membersDialog = page.getByRole('dialog', { name: '成员' })
   await membersDialog.waitFor()
   await expect.poll(() => membersDialog.locator('[tabindex="-1"]').evaluate(element => element === document.activeElement)).toBe(true)
+  // The read-only roster rides the same shared Member row, minus the action
+  // track: same avatar, same handle/description steps, no reserved button hole.
+  // The panel mounts loading, so the roster is awaited before it is measured.
+  await expect.poll(() => membersDialog.locator('[data-team-member-row]').count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(1)
+  const readOnlyRows = await membersDialog.locator('[data-team-member-row]').evaluateAll(rows => rows.map(row => ({
+    avatar: Math.round((row.querySelector('[role="img"]')?.getBoundingClientRect().width ?? 0)),
+    action: row.querySelectorAll('button').length,
+    handle: row.querySelector('strong')?.textContent ?? '',
+    description: row.querySelector('small')?.textContent ?? '',
+  })))
+  for (const row of readOnlyRows) {
+    expect(row.avatar).toBe(24)
+    expect(row.action).toBe(0)
+    expect(row.handle.startsWith('@')).toBe(true)
+    expect(row.description.length).toBeGreaterThan(0)
+  }
   await page.screenshot({ path: join(UI06_SHOTS, 'members-modal-desktop.png'), fullPage: true })
   await page.keyboard.press('Escape')
   await expect.poll(() => membersKeyboard.evaluate(element => element === document.activeElement)).toBe(true)

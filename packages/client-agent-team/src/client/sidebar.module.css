@@ -458,10 +458,13 @@
   right: -3px;
   width: 12px;
 }
-.agentCopy { display: flex; flex-direction: column; min-width: 0; }
+/* The sidebar's own seating of the shared Member identity. No main-axis
+   centring here: a centred flex line would walk the whole identity right off
+   the avatar's left edge, which is exactly the offset this list kept showing. */
+.agentCopy { display: flex; flex-direction: column; justify-content: flex-start; min-width: 0; }
 .agentCopy strong {
   font-size: 13px;
-  font-weight: 400;
+  font-weight: 500;
   line-height: 17px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -557,43 +560,7 @@
   line-height: 18px;
   margin: 0 0 10px;
 }
-.editMemberList { display: grid; gap: 3px; }
-/* Member rows mirror the Channel page manager: status slot, copy, action. */
-.editMemberRow {
-  align-items: center;
-  border-radius: 6px;
-  display: grid;
-  gap: 0 8px;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
-  min-height: 40px;
-  padding: 3px 6px;
-}
-/* Channel-scoped rows carry no status slot: name first, action last. */
-.editMemberRowChannels {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-.editMemberRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.editMemberCopy {
-  display: grid;
-  min-width: 0;
-}
-.editMemberCopy strong {
-  color: var(--dsw-alias-label-primary);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 18px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.editMemberCopy small {
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 10px;
-  line-height: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.editMemberList { display: grid; gap: 2px; }
 .editChannelName {
   font-size: 13px;
   font-weight: 400;
@@ -602,7 +569,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.editMemberRow button { min-width: 60px; }
 /* Quiet helper line under a form field (catalog loading/failure states). */
 .editHint {
   color: var(--dsw-alias-label-tertiary);

@@ -79,76 +79,17 @@
 .taskFooter:hover .taskArrow,
 .taskFooter:focus-visible .taskArrow { transform: translateX(2px); }
 
+/* The roster is a scrollable window of shared Member rows; the row owns its
+   own identity, action and failure line. */
 .memberList {
   display: grid;
-  gap: 3px;
-}
-
-.memberRow {
-  align-items: center;
-  border-radius: 6px;
-  display: grid;
-  gap: 0 8px;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
-  min-height: 40px;
-  padding: 4px 6px;
-}
-
-.memberRow:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.memberCopy {
-  display: grid;
-  min-width: 0;
-}
-
-.memberCopy strong {
-  color: var(--dsw-alias-label-primary);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 18px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memberCopy small {
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 10px;
-  line-height: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memberAction {
-  min-width: 60px;
-}
-
-.memberError {
-  color: var(--dsw-alias-state-error-primary);
-  font-size: 11px;
-  grid-column: 2 / -1;
-  line-height: 16px;
-  margin: 2px 0;
+  gap: 2px;
+  margin: 0 -6px;
 }
 
 .modalBody {
   max-height: min(65vh, 520px);
   overflow-y: auto;
-}
-
-@media (max-width: 600px) {
-  .memberRow {
-    grid-template-columns: 14px minmax(0, 1fr);
-  }
-
-  .memberAction {
-    grid-column: 2;
-    justify-self: start;
-    margin-top: 3px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

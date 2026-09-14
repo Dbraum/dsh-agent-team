@@ -11,7 +11,7 @@
 
 .group {
   display: grid;
-  gap: 3px;
+  gap: 2px;
 }
 
 .group + .group {
@@ -27,41 +27,10 @@
   margin: 0 0 3px;
 }
 
-.member {
-  align-items: center;
-  border-radius: 6px;
-  display: grid;
-  gap: 0 8px;
-  grid-template-columns: 14px minmax(0, 1fr);
-  min-height: 36px;
-  padding: 4px 6px;
-}
-
-.member:hover { background: var(--dsw-alias-interactive-bg-hover); }
-
-.copy {
-  display: grid;
-  min-width: 0;
-}
-
-.copy strong {
-  color: var(--dsw-alias-label-primary);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 18px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.copy small {
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 10px;
-  line-height: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* The read-only roster row is the shared Member row; only the group window
+   inset is local to this surface. The row carries no action, so its grid
+   collapses to identity plus copy. */
+.member { margin: 0 -6px; }
 
 .state,
 .error {

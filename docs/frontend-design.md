@@ -64,7 +64,7 @@ Channel and Thread pages are symmetric. Both subscribe to workspace changes thro
 
 Message time comes from Host projection and shares the ledger operation instant. Consecutive same-sender messages form a run; an interval of at least five minutes gets a `TeamRunDivider`. A day boundary gets a centered date anchor. `team-separators.ts` is the single authority for both decisions.
 
-Agent avatar hue is a stable hash of `memberId`; Human uses `--dsw-alias-state-business-primary`. Presence maps available/working/error/unavailable to the shared state-dot language. Errors use `--dsw-alias-state-error-primary` and `role="alert"`.
+Agent avatar hue is a stable hash of `memberId`; Human uses `--dsw-alias-state-business-primary`. Presence maps available/working/error/unavailable to the shared state-dot language, and two presentations carry it: the `TeamMemberAvatar` badge (the avatar's initial plus the dot on its bottom-right edge) wherever a person is listed as a row, and the bare `TeamPresenceDot` inside the composer's recipient menu, which is a menu row rather than a roster row. Roster rows therefore lean on the avatar badge while the menu stays with the dot; that asymmetry is deliberate, not an oversight. Errors use `--dsw-alias-state-error-primary` and `role="alert"`.
 
 ## Component contracts
 
@@ -83,6 +83,14 @@ A run groups consecutive same-sender Messages and its Task entry card. Activity 
 Structured mention chips are rendered only for handles allowed by `mentions`, case-insensitively and with optional `@`. Human literal, Agent plain prose, and rich Markdown use their corresponding segmentation path; absent names become a trailing fallback row without duplication.
 
 Known branded `task:*` refs are resolved in batches and rendered at their original position as clickable `Task #N` in Human, plain Agent, and rich Markdown text. Code fences, indented code, mixed inline code, and existing links stay literal. Normalize malformed double-colon or uppercase spellings before resolution. Resolved refs can navigate across Workspace, Channel, and Thread; failed refs remain plain text. Task numbers are home-Channel creation ordinals, while branded refs remain stable identity.
+
+### Member rosters
+
+`TeamMemberRow.tsx` is the single presentation of a person: `TeamMemberIdentity` (the presence-bearing `TeamMemberAvatar` plus the handle over its description) and an optional membership action. The Channel member-management dialog, the Channel editor's member section, and the footer's read-only Member roster all render it; the sidebar Agent list seats the same `TeamMemberIdentity` inside its own select button, so identity, tone, and truncation cannot drift between surfaces that show the same person.
+
+The row is a three-track grid — 24px avatar, `minmax(0, 1fr)` copy, `auto` action — with an 8px radius, 8px/10px padding, a 40px minimum height, and `--dsw-alias-interactive-bg-hover` on hover. The handle is 12px/18px weight 500 primary; the description is 11px/16px tertiary and ellipsizes inside the copy track instead of pushing the grid. A read-only roster omits the action and the third track collapses, handing its width back to the description rather than reserving a hole. The membership action is the row's only chrome — one `Button size="sm" variant="outline"` of at least 64×28 whose label changes (添加/移除, 更新中… while pending) while its shape does not — and the row's own failure line renders inside it as `role="alert"` under the copy track. Below 600px the action drops under the identity and aligns with the copy, because a squeezed dialog cannot afford a third column.
+
+Membership law follows the Host: joining needs `availability === 'active'` (the Host refuses any other availability), while leaving needs only the membership fact, so an already-joined Member who is temporarily down keeps a working 移除. The sidebar Agent list is the exception on spelling: it names Members as the directory does (`builder`), while rosters address them the way the composer does (`@builder`).
 
 ## Timeline scrolling
 

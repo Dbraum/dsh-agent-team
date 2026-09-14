@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+- The Channel member dialog, the Channel editor's member section, the sidebar Agent list, and the footer Member roster now draw people the same way: one shared row with the presence-bearing avatar, the handle over its description, and a single membership action.
+
+- A joined Member who is temporarily unavailable can still be removed from a Channel; only joining needs an active Member.
+
 - The team-member persona is rewritten as flowing markdown: audience-and-channel routing, message shape, etiquette, and context discipline in one quality-first voice within the 10,000-character budget.
 
 - Decision requests no longer follow a fixed `Decision needed: X (default: Y)` template: a message that owes a decision says plainly what needs deciding and what happens by default if nobody answers.

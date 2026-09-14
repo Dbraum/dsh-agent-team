@@ -334,6 +334,7 @@ exports[`Team conversation surfaces > restores persisted Team mode, reconciles a
                         >
                           <div
                             class="agentRow"
+                            data-agent-row="true"
                           >
                             <button
                               aria-label="打开 builder 的会话"
@@ -360,7 +361,7 @@ exports[`Team conversation surfaces > restores persisted Team mode, reconciles a
                                 </span>
                               </span>
                               <span
-                                class="agentCopy"
+                                class="copy agentCopy"
                               >
                                 <strong>
                                   builder
@@ -401,6 +402,7 @@ exports[`Team conversation surfaces > restores persisted Team mode, reconciles a
                         >
                           <div
                             class="agentRow"
+                            data-agent-row="true"
                           >
                             <button
                               aria-label="打开 worker 的会话"
@@ -431,7 +433,7 @@ exports[`Team conversation surfaces > restores persisted Team mode, reconciles a
                                 </span>
                               </span>
                               <span
-                                class="agentCopy"
+                                class="copy agentCopy"
                               >
                                 <strong>
                                   worker
@@ -472,6 +474,7 @@ exports[`Team conversation surfaces > restores persisted Team mode, reconciles a
                         >
                           <div
                             class="agentRow"
+                            data-agent-row="true"
                           >
                             <button
                               aria-label="打开 failed 的会话"
@@ -498,7 +501,7 @@ exports[`Team conversation surfaces > restores persisted Team mode, reconciles a
                                 </span>
                               </span>
                               <span
-                                class="agentCopy"
+                                class="copy agentCopy"
                               >
                                 <strong>
                                   failed
@@ -539,6 +542,7 @@ exports[`Team conversation surfaces > restores persisted Team mode, reconciles a
                         >
                           <div
                             class="agentRow"
+                            data-agent-row="true"
                           >
                             <button
                               aria-label="打开 offline 的会话"
@@ -566,7 +570,7 @@ exports[`Team conversation surfaces > restores persisted Team mode, reconciles a
                                 </span>
                               </span>
                               <span
-                                class="agentCopy"
+                                class="copy agentCopy"
                               >
                                 <strong>
                                   offline

@@ -7,7 +7,7 @@ import type {
 import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import { Button, IconArchiveOutline20, IconEditOutline16, IconPlayOutline16, IconPlusOutline16, IconRefreshOutline16, Input, Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TeamSidebarProps } from './slots.ts'
-import { TeamMemberAvatar } from './TeamMemberAvatar.tsx'
+import { TeamMemberIdentity } from './TeamMemberRow.tsx'
 import { SortableRow, useSidebarRowDrag } from './sidebar-drag.tsx'
 import { moveSidebarItem, useSidebarOrder } from './sidebar-order.ts'
 import { useSidebarSectionOpen, setSidebarSectionOpen } from './sidebar-sections.ts'
@@ -337,13 +337,9 @@ function AgentRow({ status, current, updateMember, recoverMember, archiveMember,
   }
   return (
     <>
-      <div className={css.agentRow} data-menu-open={menuOpen || undefined}>
+      <div className={css.agentRow} data-agent-row data-menu-open={menuOpen || undefined}>
         <button type="button" className={css.agentSelect} aria-label={t('openAgentSession', { name: status.member.handle })} aria-current={current ? 'page' : undefined} disabled={status.availability !== 'active'} onClick={() => { openMemberSession(status.member.sessionId) }}>
-          <TeamMemberAvatar status={status} t={t} />
-          <span className={css.agentCopy}>
-            <strong>{status.member.handle}</strong>
-            <small>{status.member.description}</small>
-          </span>
+          <TeamMemberIdentity status={status} name={status.member.handle.replace(/^@/, '')} className={css.agentCopy} t={t} />
         </button>
         <span className={css.rowMenu}>
           <TeamRowMenu
