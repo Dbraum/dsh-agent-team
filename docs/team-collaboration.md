@@ -44,7 +44,7 @@ Attention is durable private state for one Member and Thread: current period sta
 
 While active, other Members' Messages—and taskful Claim and Task resolution Activities—become ordinary unread. Mentions create durable direct markers. The sender's own mutation is not unread. Promotion creates a `promote` Activity for current followers. Follow/unfollow/read are private and do not advance Thread revision.
 
-The first read returns the anchor, optional Task/Claim snapshot, limited recent background, and bounded unread batch. Background is orientation and already read. `history` is the only older-facts pager.
+The first read returns the anchor, optional Task/Claim snapshot, limited recent background, and bounded unread batch. Background is orientation and already read. `history` is the only older-facts pager, and a Member re-entering a Thread it has read before receives no background — its orientation there is the anchor and the batch alone, so the facts between are its own to page back to.
 
 Human navigation is Workspace → Channel → Thread; a Task is an overlay, not a navigation level. The 「提到我」 Inbox is a global Team page: it opens from the sidebar card/narrow-rail icon and merges every visible Workspace's direct-only Inbox calls; opening it performs no Thread read, and only opening a Thread clears the mention marker. Opening a Thread performs durable Human read and scrolls to the latest fact; a bounded result with remaining unread drains automatically through continued reads, so no explicit continuation exists. History does not acknowledge new work. Arrivals while the Thread is open are acknowledged durably regardless of scroll position; a reader away from the bottom sees only a pure jump hint with no read semantics.
 

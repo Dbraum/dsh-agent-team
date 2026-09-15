@@ -31,8 +31,10 @@ async function shippedHarnessName(): Promise<string> {
 // this test exists to stop. The 2026-09-14 markdown rewrite (communication
 // discipline, Decision-needed template removed, progress nudges deleted in the
 // same change) moved the reviewed size up once, with headroom for wording that
-// earns its characters.
-const PERSONA_CHARACTER_BUDGET = 10000
+// earns its characters. The 2026-09-15 Thread entry/re-entry rule moved it up
+// again on the operator's instruction, to stop leaving every wording-only
+// improvement squeezed into the last few characters.
+const PERSONA_CHARACTER_BUDGET = 15000
 
 // The YAML block-scalar bodies under `prefix:`/`suffix:`, de-indented the way YAML
 // reads them. The block ends at the first line that is not more indented than its
