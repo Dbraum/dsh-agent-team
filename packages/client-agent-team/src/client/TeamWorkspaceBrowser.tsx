@@ -36,9 +36,12 @@ export function TeamWorkspaceBrowser({ wide, expandSidebar, navigation, selectWo
   // one is set, the selected Agent card while a Member Session view is open,
   // otherwise the browsed Workspace's overview. The selected row keeps its
   // quiet folder tint (data-selected) in every case. The mention-Inbox card
-  // takes the marker while the Inbox page stands.
+  // takes the marker while the Inbox page stands, and stands down while the
+  // embedded Member Session covers that page: the Inbox stays the remembered
+  // face underneath — closing the overlay returns to it, marker included —
+  // but the card is not a second current page while an Agent holds the seat.
   const overviewIsCurrent = navigationState.channelRef === undefined && navigationState.memberSessionId === undefined && navigationState.inbox !== true
-  const inboxIsCurrent = navigationState.inbox === true
+  const inboxIsCurrent = navigationState.inbox === true && navigationState.memberSessionId === undefined
   const [creatingAgents, setCreatingAgents] = useState<readonly AgentTeamAddMemberRequest[]>([])
   // Rail icons request expansion and name the section to reveal once wide.
   const [pendingSection, setPendingSection] = useState<SidebarSection>()

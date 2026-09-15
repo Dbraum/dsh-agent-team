@@ -1928,7 +1928,35 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   await page.locator('button[class*="inboxCard"]').focus()
   await page.keyboard.press('Space')
   await page.locator('[data-team-inbox]').waitFor()
-  await expect.poll(async () => await page.locator('button[class*="inboxCard"]').getAttribute('aria-current')).toBe('page')
+  const inboxEntry = page.locator('button[class*="inboxCard"]')
+  await expect.poll(async () => await inboxEntry.getAttribute('aria-current')).toBe('page')
+
+  // An Agent card is the one Team row a reader can open from the Inbox page, and
+  // the overlay embeds that Session over the page instead of replacing it. That
+  // makes the Inbox the one face that can stand underneath the Member view, so
+  // the two must not both claim the seat: the Agent card takes the marker and the
+  // Inbox entry stands down — it is the remembered face underneath, not a second
+  // current page — while the page itself leaves the seat with the overlay.
+  const liveAgentCard = page.locator('button[class*="agentSelect"]:not([disabled])').first()
+  const liveAgentName = await liveAgentCard.getAttribute('aria-label')
+  await liveAgentCard.click()
+  await page.locator('[data-team-inbox]').waitFor({ state: 'detached' })
+  await page.locator('[data-composer-input][contenteditable="true"]').first().waitFor()
+  await expect.poll(async () => await page.locator('[aria-current="page"]').count()).toBe(1)
+  await expect.poll(async () => await page.locator('[aria-current="page"]').getAttribute('aria-label')).toBe(liveAgentName)
+  await expect.poll(async () => await inboxEntry.getAttribute('aria-current')).toBeNull()
+  await settleLayout(page)
+  await page.screenshot({ path: join(UI07_SHOTS, 'inbox-under-agent-overlay.png'), fullPage: true })
+  // Asking for the Inbox is Team navigation: it closes the overlay and puts the
+  // reader back on the page they were reading, marker included — one marked row
+  // at every step, never two and never none. The seat matters as much as the
+  // sidebar here: the shipped composer belongs to the Member Session, so the
+  // page the reader asked for is only really back once that composer is gone.
+  await inboxEntry.click()
+  await page.locator('[data-team-inbox]').waitFor()
+  await expect.poll(async () => await page.locator('[aria-current="page"]').count()).toBe(1)
+  await expect.poll(async () => await inboxEntry.getAttribute('aria-current')).toBe('page')
+  await expect.poll(async () => await page.locator('[data-composer-input]').count()).toBe(0)
 
   const channelKeyboard = page.getByRole('button', { name: '# delivery' })
   await channelKeyboard.focus()

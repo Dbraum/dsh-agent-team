@@ -150,6 +150,9 @@ describe('TeamNavigation', () => {
       navigation => { navigation.actions().selectWorkspace('workspace:two' as never) },
       navigation => { navigation.actions().selectChannel('channel:2' as never) },
       navigation => { navigation.actions().selectThread('thread:9' as never) },
+      // The Inbox entry is Team navigation too, and the one face an Agent
+      // overlay can be opened from: asking for the page closes the overlay.
+      navigation => { navigation.actions().selectInbox() },
       navigation => { navigation.actions().backToChannels() },
       navigation => { navigation.actions().backToWorkspace() },
       navigation => { navigation.actions().enterTeam() },

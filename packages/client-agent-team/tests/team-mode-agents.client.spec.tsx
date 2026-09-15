@@ -379,6 +379,38 @@ describe('Team agent surfaces', () => {
     await b.runtime.dispose()
   })
 
+  it('lends the Agent card the marker while the Inbox page stands under it', async () => {
+    // The Inbox page is a Team face the reader can be standing on when they open
+    // an Agent, and the overlay embeds that Session over the page rather than
+    // replacing it: the page keeps its place while exactly one row — the Agent
+    // card — wears the marker, and the entry takes the marker back on the way out.
+    const b = await runtimeWithTeam({ mode: 'team', workspaceId: 'w1', initialChannels: true })
+    await b.runtime.sessions.add({ id: 'session:member:builder' as never, summary: { title: 'builder', cwd: '/work/alpha' } } as never)
+    await b.view.findByText('builder')
+    const entry = b.view.getByRole('button', { name: /^收件箱/ })
+    fireEvent.click(entry)
+    await waitFor(() => { expect(b.view.container.querySelector('[data-team-inbox]')).toBeTruthy() })
+    await waitFor(() => { expect(entry.getAttribute('aria-current')).toBe('page') })
+
+    const card = b.view.getByRole('button', { name: '打开 builder 的会话' })
+    fireEvent.click(card)
+    await waitFor(() => { expect(b.view.container.querySelector('[data-phase]')).toBeTruthy() })
+    // The page left the seat with the overlay, and only the card is marked: the
+    // Inbox entry is a remembered location, not a second current page.
+    expect(b.view.container.querySelector('[data-team-inbox]')).toBeNull()
+    await waitFor(() => { expect(card.getAttribute('aria-current')).toBe('page') })
+    expect(entry.getAttribute('aria-current')).toBeNull()
+    for (const row of b.view.container.querySelectorAll('[aria-current="page"]')) expect(row).toBe(card)
+
+    // Leaving the overlay puts the reader back on the page they were reading,
+    // and the marker goes home with them.
+    fireEvent.click(entry)
+    await waitFor(() => { expect(b.view.container.querySelector('[data-team-inbox]')).toBeTruthy() })
+    expect(entry.getAttribute('aria-current')).toBe('page')
+    expect(card.getAttribute('aria-current')).toBeNull()
+    await b.runtime.dispose()
+  })
+
   it('rebinds the underlying session when leaving an embedded Member view, so an off-seat rollover never blanks the seat', async () => {
     const b = await runtimeWithTeam({ mode: 'team', workspaceId: 'w1', initialChannels: true })
     // Added without taking the selection: the Human's ordinary session stays
