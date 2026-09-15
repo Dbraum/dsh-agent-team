@@ -1,0 +1,36 @@
+.stack {
+  align-items: center;
+  display: inline-flex;
+  flex: none;
+}
+
+/* One overlapping circle. The 2px base-colored ring is what separates
+   neighbours, and the hue is the shared Member hash, so an owner reads the
+   same here as their timeline avatar. */
+.avatar,
+.overflow {
+  align-items: center;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--dsw-alias-bg-base);
+  corner-shape: round;
+  display: inline-flex;
+  font-size: 9px;
+  font-weight: 600;
+  height: 18px;
+  justify-content: center;
+  width: 18px;
+}
+
+.avatar {
+  background: hsl(var(--team-avatar-hue, 212) 42% 46%);
+  color: #fff;
+}
+
+/* The overflow chip keeps the circle geometry without claiming an identity. */
+.overflow {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.avatar + .avatar,
+.avatar + .overflow { margin-left: -6px; }

@@ -41,6 +41,7 @@ import type {
   AgentTeamDmSentOperation,
   AgentTeamHumanActor,
   AgentTeamInbox,
+  AgentTeamInboxActor,
   AgentTeamInboxRequest,
   AgentTeamInboxDelta,
   AgentTeamInboxItem,
@@ -371,6 +372,8 @@ interface Projection {
   readonly taskCountByChannel: Map<AgentTeamChannelRef, number>
   /** Threads each Member follows — the reverse of attentionByThread, for per-reader Inbox candidates. */
   readonly attentionThreadsByMember: Map<AgentTeamMemberId, Set<AgentTeamThreadRef>>
+  /** Threads each Member has written a Message in; participation is what the recent slice admits. */
+  readonly threadsByWriter: Map<AgentTeamMemberId, Set<AgentTeamThreadRef>>
   /** Direct markers bucketed per recipient Member and Thread, kept sorted by sequence. */
   readonly directMarkersByMember: Map<AgentTeamMemberId, Map<AgentTeamThreadRef, AgentTeamDirectMarker[]>>
   /** Activity markers bucketed per recipient Member and Thread, kept sorted by sequence. */
@@ -393,6 +396,7 @@ function emptyProjection(): Projection {
     messagesByRef: new Map(),
     attentionByThread: new Map(), previousSessions: new Map(), rolloverSeeds: new Map(),
     anchorByThread: new Map(), taskNumberByTask: new Map(), taskCountByChannel: new Map(), attentionThreadsByMember: new Map(),
+    threadsByWriter: new Map(),
     directMarkersByMember: new Map(), activityMarkersByMember: new Map(), observationsByThread: new Map() }
 }
 
@@ -402,15 +406,25 @@ function assertUnhandledKind(operation: never): never {
 }
 
 /**
- * Opening-line preview for a direct-only Human Inbox row: the Thread anchor's
- * first line, trimmed, then capped at 120 characters with an explicit mark —
- * the same bound the Thread page applies to its Task title, so the row and
- * the page it opens never disagree about what a Thread is about.
+ * Opening-line preview for a Human Inbox row: the Thread anchor's first line,
+ * trimmed, then capped at 120 characters with an explicit mark — the same bound
+ * the Thread page applies to its Task title, so the row and the page it opens
+ * never disagree about what a Thread is about.
  */
 function boundedInboxPreview(body: string): string {
   const firstLine = body.split('\n', 1)[0]?.trim() ?? ''
   return firstLine.length > 120 ? `${firstLine.slice(0, 119)}…` : firstLine
 }
+
+/**
+ * How many Threads one Workspace's 「最近活跃」 slice may carry. It bounds what
+ * the Host hands over, not what the reader sees: the Client merges every
+ * visible Workspace's slice and trims the merged list to its own visible bound
+ * (`RECENT_ROWS_LIMIT`), which must stay at or below this one so no Workspace
+ * is cut short before the merge. The unread slice keeps its own `limit`
+ * request field.
+ */
+const RECENT_INBOX_LIMIT = 10
 
 /**
  * Whether one operation's Inbox delta would change nothing. A read that finds
@@ -1370,16 +1384,21 @@ export class AgentTeamLedger {
     const authorized = this.assertActorForWorkspace(actor, request.workspaceId)
     const limit = request.limit ?? 50
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('inbox limit must be an integer between 1 and 100')
-    // The Human direct-only slice serves the Client's mention queue: rows show
-    // only Threads with an unread mention, `totalUnreadCount` collapses to the
-    // direct total so a badge on this call cannot bypass follow unread, and
-    // each row carries its Channel display name plus the Thread's opening line
-    // so the Client renders without a Channel view per row. The ordinary
-    // (agent-facing) projection stays body-free.
-    const directOnly = request.directOnly === true
-    const taskNumbers = directOnly ? this.taskNumbers(request.workspaceId) : undefined
+    // One unread slice serves every reader: Threads the reader follows or
+    // holds a marker on, admitted whenever they hold an unread fact — mentions
+    // are counted inside it (`directCount`), never a separate admission rule.
+    // Every row carries its rendering material — Channel display name, Task
+    // ordinal, opening line, and the person the row's instant came from — so the
+    // Client renders a row without a Channel or Member view per row. Carrying
+    // the opening line on the agent-facing projection is
+    // safe: model-visible notifications read the refs and the facts, never this.
+    // A Human reader additionally receives the separate 「最近活跃」 slice below;
+    // `items` stays exactly the unread queue for every reader, so the badge
+    // totals and the agent-facing `team_inbox` result cannot drift with it.
+    const taskNumbers = this.taskNumbers(request.workspaceId)
     const items: AgentTeamInboxItem[] = []
-    for (const threadRef of this.inboxCandidateThreads(authorized.memberId, directOnly)) {
+    const unreadThreads = new Set<AgentTeamThreadRef>()
+    for (const threadRef of this.inboxCandidateThreads(authorized.memberId)) {
       const thread = this.state.threads.get(threadRef)
       if (thread === undefined) continue
       const channelRef = this.channelRefForThread(thread.threadRef)
@@ -1388,41 +1407,95 @@ export class AgentTeamLedger {
       if (authorized.kind === 'member' && !this.isChannelMember(channelRef, authorized.memberId)) continue
       const unread = this.unreadFor(authorized.memberId, thread.threadRef)
       if (unread.length === 0) continue
+      unreadThreads.add(thread.threadRef)
       const task = thread.taskRef === undefined ? undefined : this.state.tasks.get(thread.taskRef)
       const directCount = unread.filter(item => item.direct).length
-      if (directOnly && directCount === 0) continue
       const attention = this.attentionFor(authorized.memberId, thread.threadRef)
       // Same snapshot, same source as newestSequence: the instant hangs off
       // the newest unread fact itself, never a second lookup that could
       // observe a different commit between the two reads.
       const newest = unread.at(-1)!.fact
-      const taskNumber = directOnly && task !== undefined ? taskNumbers?.get(task.taskRef) : undefined
+      const taskNumber = task === undefined ? undefined : taskNumbers.get(task.taskRef)
       items.push(Object.freeze({ channelRef,
-        ...(directOnly ? { channelName: this.state.channels.get(channelRef)?.name ?? '' } : {}),
+        channelName: this.state.channels.get(channelRef)?.name ?? '',
         ...(task === undefined ? {} : { task }), ...(taskNumber === undefined ? {} : { taskNumber }), thread,
         unreadCount: unread.length, directCount,
-        ...(directOnly ? { previewText: boundedInboxPreview(this.threadAnchor(thread.threadRef).body) } : {}),
-        newestSequence: newest.sequence, newestOccurredAt: newest.occurredAt, ...(attention === undefined ? {} : { attention }) }))
+        previewText: boundedInboxPreview(this.threadAnchor(thread.threadRef).body),
+        newestSequence: newest.sequence, newestOccurredAt: newest.occurredAt,
+        newestActor: this.inboxActorFor(newest), ...(attention === undefined ? {} : { attention }) }))
     }
     items.sort((left, right) => right.directCount - left.directCount || right.newestSequence - left.newestSequence || left.thread.threadRef.localeCompare(right.thread.threadRef))
     const selected = items.slice(0, limit)
-    return Object.freeze({ items: Object.freeze(selected),
-      totalUnreadCount: directOnly
-        ? items.reduce((sum, item) => sum + item.directCount, 0)
-        : items.reduce((sum, item) => sum + item.unreadCount, 0),
+    const recent = authorized.kind === 'human'
+      ? this.recentInboxItems(authorized.memberId, request.workspaceId, unreadThreads, taskNumbers)
+      : Object.freeze([] as AgentTeamInboxItem[])
+    return Object.freeze({ items: Object.freeze(selected), recent,
+      totalUnreadCount: items.reduce((sum, item) => sum + item.unreadCount, 0),
       totalDirectCount: items.reduce((sum, item) => sum + item.directCount, 0) })
+  }
+
+  /**
+   * The one person a row names: whoever committed the fact that row's instant
+   * came from — a Message's sender, an activity's actor — resolved to the handle
+   * the row draws. Resolving it here is what spares every Client row a Member
+   * view of its own, and a Member the roster no longer names still reads as
+   * themselves through their raw id rather than as nobody.
+   */
+  private inboxActorFor(fact: AgentTeamThreadFact): AgentTeamInboxActor {
+    const memberId = fact.kind === 'message' ? fact.message.sender : fact.activity.actor
+    return Object.freeze({ memberId, name: this.state.members.get(memberId)?.handle ?? memberId })
+  }
+
+  /**
+   * The Human Inbox's 「最近活跃」 slice: the Threads this reader has written in
+   * — the durable way back into work instead of a mention-only queue.
+   * Participation is the whole admission rule: a reader who replied to somebody
+   * else's Thread is here whether or not they follow it, and so is one who
+   * started a Thread nobody has answered yet, because starting one is writing
+   * its anchor. Attention deliberately plays no part — it decides what notifies
+   * a reader (a reply does not implicitly follow a Thread), and reading it here
+   * as well is what once hid every Thread a reader had replied to without
+   * following. A Thread the reader later unfollowed stays: they did take part
+   * in it, and unfollowing stops the notifications, not the record. Every
+   * Thread still holding unread is excluded because the queue above already
+   * carries it, and the slice is newest-activity first, bounded by
+   * `RECENT_INBOX_LIMIT`. Rows are the same shape as unread rows with every
+   * count at zero — they are the same row to render.
+   */
+  private recentInboxItems(memberId: AgentTeamMemberId, workspaceId: WorkspaceId,
+    unreadThreads: ReadonlySet<AgentTeamThreadRef>, taskNumbers: ReadonlyMap<AgentTeamTaskRef, number>): readonly AgentTeamInboxItem[] {
+    const recent: AgentTeamInboxItem[] = []
+    for (const threadRef of this.state.threadsByWriter.get(memberId) ?? []) {
+      if (unreadThreads.has(threadRef)) continue
+      const thread = this.state.threads.get(threadRef)
+      if (thread === undefined) continue
+      const channelRef = this.channelRefForThread(thread.threadRef)
+      if (channelRef === undefined) continue
+      if (this.state.channels.get(channelRef)?.workspaceId !== workspaceId) continue
+      const facts = this.state.factsByThread.get(thread.threadRef) ?? []
+      const newest = facts.at(-1)
+      if (newest === undefined) continue
+      const task = thread.taskRef === undefined ? undefined : this.state.tasks.get(thread.taskRef)
+      const taskNumber = task === undefined ? undefined : taskNumbers.get(task.taskRef)
+      recent.push(Object.freeze({ channelRef,
+        channelName: this.state.channels.get(channelRef)?.name ?? '',
+        ...(task === undefined ? {} : { task }), ...(taskNumber === undefined ? {} : { taskNumber }), thread,
+        unreadCount: 0, directCount: 0,
+        previewText: boundedInboxPreview(this.threadAnchor(thread.threadRef).body),
+        newestSequence: newest.sequence, newestOccurredAt: newest.occurredAt,
+        newestActor: this.inboxActorFor(newest) }))
+    }
+    recent.sort((left, right) => right.newestSequence - left.newestSequence || left.thread.threadRef.localeCompare(right.thread.threadRef))
+    return Object.freeze(recent.slice(0, RECENT_INBOX_LIMIT))
   }
 
   /**
    * Threads that can hold unread facts for one reader, from the per-reader
    * derived indexes: Attention follows plus direct and activity markers.
    * Every unread source is covered — ordinary unread requires Attention, and
-   * marker unread requires a marker — so no full Thread scan is needed. The
-   * direct-only slice needs only the direct-marker threads, since a row
-   * requires at least one direct unread.
+   * marker unread requires a marker — so no full Thread scan is needed.
    */
-  private inboxCandidateThreads(memberId: AgentTeamMemberId, directOnly: boolean): Iterable<AgentTeamThreadRef> {
-    if (directOnly) return this.state.directMarkersByMember.get(memberId)?.keys() ?? []
+  private inboxCandidateThreads(memberId: AgentTeamMemberId): Iterable<AgentTeamThreadRef> {
     const refs = new Set<AgentTeamThreadRef>()
     for (const source of [this.state.attentionThreadsByMember.get(memberId), this.state.directMarkersByMember.get(memberId), this.state.activityMarkersByMember.get(memberId)]) {
       for (const threadRef of source?.keys() ?? []) refs.add(threadRef)
@@ -2644,7 +2717,7 @@ export class AgentTeamLedger {
 
   /** Facts arrive in ledger sequence order, so global and per-thread lists stay sorted by append only. */
   private appendMessageFact(
-    target: Pick<Projection, 'orderedFacts' | 'factsByThread' | 'messageCountByThread' | 'messagesByRef'>,
+    target: Pick<Projection, 'orderedFacts' | 'factsByThread' | 'messageCountByThread' | 'messagesByRef' | 'threadsByWriter'>,
     message: AgentTeamMessage,
     mentions: readonly AgentTeamMemberId[],
     occurredAt: string,
@@ -2658,6 +2731,11 @@ export class AgentTeamLedger {
     // The ref index is written in this same step, so it is exactly the set of
     // replayed Messages: a validator lookup can never reach a later record.
     target.messagesByRef.set(message.messageRef, message)
+    // Participation is indexed per writer as the fact lands, so the Human
+    // recent slice asks who wrote where without scanning the whole ledger.
+    const written = target.threadsByWriter.get(message.sender) ?? new Set<AgentTeamThreadRef>()
+    written.add(message.threadRef)
+    target.threadsByWriter.set(message.sender, written)
   }
 
   private appendActivityFact(target: Pick<Projection, 'orderedFacts' | 'factsByThread'>, activity: AgentTeamActivity, occurredAt: string): void {

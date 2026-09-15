@@ -11,6 +11,21 @@ import css from './sidebar.module.css'
 
 type SidebarSection = 'channels' | 'agents'
 
+/**
+ * The Inbox entry's icon with its unread mark. The quantity left this surface
+ * and lives in the control's accessible name: the sidebar answers whether
+ * anything is waiting at a glance, and the number — which moves on every fact —
+ * is what a reader asks for on purpose. The mark hangs off the icon rather than
+ * off the control, so the wide card and the 36px rail button put the same dot
+ * on the same corner of the same glyph.
+ */
+function InboxMark({ unread }: { readonly unread: number }) {
+  return <span className={css.inboxMark}>
+    <IconQueueOutline14 size={16} />
+    {unread > 0 && <span className={css.inboxDot} data-team-inbox-dot aria-hidden="true" />}
+  </span>
+}
+
 export function TeamWorkspaceBrowser({ wide, expandSidebar, navigation, selectWorkspace, selectChannel, selectInbox, t, useWorkspaces, loadMembers, loadInbox, subscribeChanges, subscribeReads, addMember, loadChannels, createChannel, updateChannel, archiveChannel, updateMember, recoverMember, archiveMember, joinChannel, removeChannelMember, loadModels, openMemberSession }: TeamSidebarProps) {
   const navigationState = useSyncExternalStore(navigation.subscribe, navigation.getSnapshot, navigation.getSnapshot)
   const workspaces = useWorkspaces(state => state.items)
@@ -30,17 +45,21 @@ export function TeamWorkspaceBrowser({ wide, expandSidebar, navigation, selectWo
   const channelsRef = useRef<HTMLDivElement>(null)
   const agentsRef = useRef<HTMLDivElement>(null)
   const workspacesOpen = useSidebarSectionOpen(undefined, 'workspaces')
-  // The cross-Workspace mention badge: one scope-less subscription while the
-  // Team sidebar stands; every wake re-pulls each Workspace's direct-only
-  // total (limit 1 — totals cover every row, never the list). Same-burst
-  // wakes coalesce behind a short debounce; the total is still whatever the
-  // Host's direct-only projection returns.
+  // The cross-Workspace Inbox badge: one scope-less subscription while the
+  // Team sidebar stands; every wake re-pulls each Workspace's unread total
+  // (limit 1 — totals cover every row, never the list). Same-burst wakes
+  // coalesce behind a short debounce; the number is whatever the Host's whole
+  // unread slice returns, mentions included rather than alone.
   const [inboxTotal, setInboxTotal] = useState(0)
+  // One name for both entries: what the control is, and how much waits behind
+  // it. The rail repeats it as its hover hint, which is the only place a reader
+  // still meets the quantity without opening the page.
+  const inboxLabel = inboxTotal > 0 ? t('inboxTitleWithCount', { count: inboxTotal }) : t('inboxTitle')
   useEffect(() => {
     let disposed = false
     let scheduled: ReturnType<typeof setTimeout> | undefined
     const refresh = async (): Promise<void> => {
-      const results = await Promise.all(workspaces.map(workspace => loadInbox({ workspaceId: workspace.workspaceId, directOnly: true, limit: 1 })))
+      const results = await Promise.all(workspaces.map(workspace => loadInbox({ workspaceId: workspace.workspaceId, limit: 1 })))
       if (disposed) return
       setInboxTotal(results.reduce((sum, result) => result.ok ? sum + result.value.totalUnreadCount : sum, 0))
     }
@@ -82,10 +101,9 @@ export function TeamWorkspaceBrowser({ wide, expandSidebar, navigation, selectWo
 
   if (!wide) {
     return <nav className={css.railWorkspace} aria-label={t('workspaceSections')}>
-      <Tooltip label={t('mentionsOfMe')} side="right">
-        <button type="button" className={css.railButton} aria-label={inboxTotal > 0 ? t('mentionsOfMeWithCount', { count: inboxTotal }) : t('mentionsOfMe')} aria-current={inboxIsCurrent ? 'page' : undefined} onClick={() => { selectInbox(); expandSidebar() }}>
-          <IconQueueOutline14 size={16} />
-          {inboxTotal > 0 && <span className={css.inboxBadge} aria-hidden="true">{inboxTotal > 99 ? '99+' : inboxTotal}</span>}
+      <Tooltip label={inboxLabel} side="right">
+        <button type="button" className={css.railButton} aria-label={inboxLabel} aria-current={inboxIsCurrent ? 'page' : undefined} onClick={() => { selectInbox(); expandSidebar() }}>
+          <InboxMark unread={inboxTotal} />
         </button>
       </Tooltip>
       <Tooltip label={t('channels')} side="right">
@@ -102,10 +120,9 @@ export function TeamWorkspaceBrowser({ wide, expandSidebar, navigation, selectWo
   }
 
   return <section className={css.workspaceBrowser} aria-label={t('workspaces')}>
-    <button type="button" className={css.inboxCard} aria-label={inboxTotal > 0 ? t('mentionsOfMeWithCount', { count: inboxTotal }) : t('mentionsOfMe')} aria-current={inboxIsCurrent ? 'page' : undefined} onClick={selectInbox}>
-      <IconQueueOutline14 size={16} />
-      <span className={css.inboxCardLabel}>{t('mentionsOfMe')}</span>
-      {inboxTotal > 0 && <span className={css.inboxBadge} aria-hidden="true">{inboxTotal > 99 ? '99+' : inboxTotal}</span>}
+    <button type="button" className={css.inboxCard} aria-label={inboxLabel} aria-current={inboxIsCurrent ? 'page' : undefined} onClick={selectInbox}>
+      <InboxMark unread={inboxTotal} />
+      <span className={css.inboxCardLabel}>{t('inboxTitle')}</span>
     </button>
     <TeamSidebarSection title={t('workspaces')} open={workspacesOpen} onToggle={open => { setSidebarSectionOpen(undefined, 'workspaces', open) }}>
       <div className={css.workspaceList}>

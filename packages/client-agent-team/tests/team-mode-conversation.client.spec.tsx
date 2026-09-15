@@ -63,10 +63,17 @@ describe('Team conversation surfaces', () => {
       expect(rows.some(row => row.textContent === 'hello team @builder')).toBe(true)
     })
     expect(b.view.queryByText('任务消息')).toBeNull()
+    // The state moved up onto the identity line, and the Task's own row under
+    // the body replaced the always-on pill that used to repeat status + count.
     expect(b.view.getByText('待处理')).toBeTruthy()
-    expect(b.view.getByText('1 条消息')).toBeTruthy()
+    expect(b.view.getByText('Task #1')).toBeTruthy()
+    expect(b.view.queryByText('1 条消息')).toBeNull()
+    b.publishAgentReply()
+    // The reply and its Claim are newer facts than the opener, so the entry row
+    // now says when the work last moved.
     b.publishAgentReply()
     await waitFor(() => expect(b.view.queryByText('agent reply')).toBeNull())
+    await waitFor(() => expect(b.view.getByRole('button', { name: '打开 Task #1' }).textContent).toContain('最近活动'))
     fireEvent.click(b.view.getByRole('button', { name: '打开 Task #1' }))
     expect(await b.view.findByRole('heading', { name: 'Task #1' })).toBeTruthy()
     fireEvent.click(b.view.getByRole('button', { name: /Claims/ }))
@@ -104,6 +111,39 @@ describe('Team conversation surfaces', () => {
     fireEvent.click(b.view.getByRole('button', { name: '返回频道' }))
     expect(await b.view.findByRole('heading', { name: '# backend' })).toBeTruthy()
     await waitFor(() => expect(b.view.queryByText('agent reply')).toBeNull())
+    await b.runtime.dispose()
+  })
+
+  it("shows the Host's own unread on the Channel feed's Thread entries and drops it with the slice", async () => {
+    const b = await runtimeWithTeam({
+      mode: 'team', workspaceId: 'w1', initialChannels: true,
+      seededMessages: [{ body: '开工任务', occurredAt: '2026-08-21T09:00:00.000Z' }],
+    })
+    // The unfiltered Inbox slice: this Thread needs the Human for 150 facts of
+    // which only one is a mention, so the badge is not a mention count.
+    b.seedInbox([{
+      workspaceId: 'w1', channelRef: 'channel:engineering',
+      thread: { threadRef: 'thread:1', taskRef: 'task:1', revision: 4 },
+      unreadCount: 150, directCount: 1, newestSequence: 9, newestOccurredAt: '2026-08-21T09:30:00.000Z',
+    }])
+    fireEvent.click(await b.view.findByRole('button', { name: '# engineering' }))
+    // The label carries the real number and the semantics; the capsule caps at 99+.
+    const entry = await b.view.findByRole('button', { name: '打开 Task #1（150 条新动态）' })
+    const row = entry.closest('article')!
+    expect(within(row).getByText('99+')).toBeTruthy()
+    expect(within(row).getByText('待处理')).toBeTruthy()
+    // The state leads the entry's own line, on the reading path the body and the
+    // door share — it never trails a line the reader has to cross the column
+    // for, and a continuation row has no identity line to float on. It also
+    // stays outside the door button, whose label would otherwise prune it.
+    const entryLine = entry.parentElement!
+    expect(entryLine.firstElementChild?.textContent).toBe('待处理99+')
+    expect(entryLine.getAttribute('data-thread-entry')).toBe('')
+    // A consumed Thread leaves no stale count behind: the next slice is empty.
+    b.seedInbox([])
+    b.seedInbox([])
+    await waitFor(() => expect(within(row).queryByText('99+')).toBeNull())
+    expect(b.view.getByRole('button', { name: '打开 Task #1' })).toBeTruthy()
     await b.runtime.dispose()
   })
 
@@ -171,9 +211,19 @@ describe('Team conversation surfaces', () => {
       seededMessages: [{ body: '开工任务', occurredAt: '2026-08-21T09:00:00.000Z' }],
     })
     fireEvent.click(await b.view.findByRole('button', { name: '# engineering' }))
-    // The active Claim arrives with the agent activity refresh.
+    // The active Claim arrives with the agent activity refresh; the scaffold's
+    // parked first probe consumes one publish, so the second wakes the page.
     b.publishAgentReply()
-    fireEvent.click(await b.view.findByRole('button', { name: '打开 Task #1' }))
+    b.publishAgentReply()
+    // The in_progress Task's entry leads with its live Claim owner and its
+    // status word: ownership and state ride the row that opens the Thread,
+    // instead of the old always-on pill or a line's far end. The owner stack
+    // keeps its own label because it sits outside the door button.
+    const claimEntry = await b.view.findByRole('button', { name: '打开 Task #1' })
+    const claimLine = claimEntry.parentElement!
+    expect(within(claimLine).getByRole('img', { name: '由 @builder 处理' })).toBeTruthy()
+    expect(claimLine.firstElementChild?.textContent).toContain('进行中')
+    fireEvent.click(claimEntry)
     expect(await b.view.findByRole('heading', { name: 'Task #1' })).toBeTruthy()
 
     // An in_progress Task with an open Claim offers acceptance behind a

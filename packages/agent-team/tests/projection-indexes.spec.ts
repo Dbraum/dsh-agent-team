@@ -213,33 +213,36 @@ describe('large-ledger projection equivalence (issue #21)', () => {
     const topLevel = ledger.view({ workspaceId: alpha, channelRef: channelA.channelRef, topLevelOnly: true, limit: 100 })
     expect(topLevel.items.map(item => item.message.messageRef)).toEqual(threads.filter(thread => thread.channelRef === channelA.channelRef).map(thread => thread.messageRefs[0]))
 
-    // ---- inbox(): direct-only slice equals the remaining mention markers. ----
-    const humanInbox = ledger.inbox(human, { workspaceId: alpha, directOnly: true, limit: 100 })
-    const humanRows = ['b4', 'b3', 'b2']
+    // ---- inbox(): one unread slice per reader, mentions counted inside it. ----
+    const humanInbox = ledger.inbox(human, { workspaceId: alpha, limit: 100 })
+    // What the Human's own reads did not consume: the planner's mentions on
+    // b2..b4 (markers, still unread) and the agent progress on a0/a1/a3/a4 —
+    // the ordinary follow unread the mention-only slice used to hide. Mentions
+    // sort first, each class newest unread first.
+    const humanRows = ['b4', 'b3', 'b2', 'a4', 'a3', 'a1', 'a0']
     expect(humanInbox.items.map(item => item.thread.threadRef)).toEqual(humanRows.map(label => byLabel.get(label)!.threadRef))
-    expect(humanInbox.totalUnreadCount).toBe(3)
+    expect(humanInbox.totalUnreadCount).toBe(15)
     expect(humanInbox.totalDirectCount).toBe(3)
     for (const item of humanInbox.items) {
-      expect(item.channelName).toBe('alpha-two')
-      expect(item.directCount).toBe(1)
-      expect(item.unreadCount).toBe(1)
-      expect(item.previewText).toBe(`Task ${threads.find(thread => thread.threadRef === item.thread.threadRef)!.label}`)
-      expect(item.taskNumber).toBe(threads.find(thread => thread.threadRef === item.thread.threadRef)!.taskNumber)
+      const source = threads.find(thread => thread.threadRef === item.thread.threadRef)!
+      const mentioned = ['b2', 'b3', 'b4'].includes(source.label)
+      expect(item).toMatchObject(mentioned ? { unreadCount: 1, directCount: 1 } : { unreadCount: 3, directCount: 0 })
+      expect(item.channelName).toBe(mentioned ? 'alpha-two' : 'alpha-one')
+      expect(item.previewText).toBe(`Task ${source.label}`)
+      expect(item.taskNumber).toBe(source.taskNumber)
     }
     // limit still bounds only items; the total collapses the whole slice.
-    const humanBadge = ledger.inbox(human, { workspaceId: alpha, directOnly: true, limit: 1 })
+    const humanBadge = ledger.inbox(human, { workspaceId: alpha, limit: 1 })
     expect(humanBadge.items).toHaveLength(1)
-    expect(humanBadge.totalUnreadCount).toBe(3)
-    // The beta Workspace has no Human mention at all.
-    const betaInbox = ledger.inbox(human, { workspaceId: beta, directOnly: true, limit: 100 })
-    expect(betaInbox.items).toEqual([])
-    expect(betaInbox.totalUnreadCount).toBe(0)
-    // Pure follow unread stays out of the direct-only slice. The a5 unfollow
-    // consumed that Thread's marker with the Attention, so four remain.
-    const agentADirect = ledger.inbox(memberActor(agentA, 'scout'), { workspaceId: alpha, directOnly: true, limit: 100 })
-    expect(agentADirect.items.map(item => item.thread.threadRef).sort()).toEqual(['a6', 'a7', 'a8', 'a9'].map(label => byLabel.get(label)!.threadRef).sort())
+    expect(humanBadge.totalUnreadCount).toBe(15)
+    // The beta Workspace holds ordinary follow unread with no mention at all,
+    // which is admission enough now.
+    const betaInbox = ledger.inbox(human, { workspaceId: beta, limit: 100 })
+    expect(betaInbox.items.map(item => item.thread.threadRef)).toEqual(['c4', 'c3', 'c2', 'c1', 'c0'].map(label => byLabel.get(label)!.threadRef))
+    expect(betaInbox.totalUnreadCount).toBe(5)
+    expect(betaInbox.totalDirectCount).toBe(0)
 
-    // ---- inbox(): the agent-facing slice. ----
+    // ---- inbox(): the same slice for an Agent reader. ----
     const agentAInbox = ledger.inbox(memberActor(agentA, 'scout'), { workspaceId: alpha, limit: 100 })
     const unreadA = Object.fromEntries(agentAInbox.items.map(item => [item.thread.threadRef, { unreadCount: item.unreadCount, directCount: item.directCount }]))
     // a0: followed before three agent replies; a6..a9: the mention plus the
@@ -248,6 +251,15 @@ describe('large-ledger projection equivalence (issue #21)', () => {
     expect(unreadA[byLabel.get('a0')!.threadRef]).toEqual({ unreadCount: 3, directCount: 0 })
     for (const label of ['a6', 'a7', 'a8', 'a9']) expect(unreadA[byLabel.get(label)!.threadRef]).toEqual({ unreadCount: 4, directCount: 1 })
     expect(Object.keys(unreadA)).toHaveLength(5)
+    // Row material rides every slice now: the agent-facing rows carry their
+    // Channel name, Task ordinal, and opening line exactly like the Human
+    // slice, so both render from one shape.
+    for (const item of agentAInbox.items) {
+      const source = threads.find(thread => thread.threadRef === item.thread.threadRef)!
+      expect(item.channelName).toBe('alpha-one')
+      expect(item.previewText).toBe(`Task ${source.label}`)
+      expect(item.taskNumber).toBe(source.taskNumber)
+    }
     const agentBInbox = ledger.inbox(memberActor(agentB, 'planner'), { workspaceId: alpha, limit: 100 })
     // planner's own replies never count; the plain Human update on a2 does.
     expect(agentBInbox.items.map(item => item.thread.threadRef)).toEqual([byLabel.get('a2')!.threadRef])
@@ -280,7 +292,7 @@ describe('large-ledger projection equivalence (issue #21)', () => {
     const thread = source.view({ workspaceId: alpha, channelRef, limit: 1 }).threads[0]!
     return {
       inboxA: source.inbox(memberActor('member:agent-a', 'scout'), { workspaceId: alpha, limit: 100 }),
-      inboxHuman: source.inbox(human, { workspaceId: alpha, directOnly: true, limit: 100 }),
+      inboxHuman: source.inbox(human, { workspaceId: alpha, limit: 100 }),
       viewA: source.view({ workspaceId: alpha, channelRef, limit: 7 }),
       viewTail: source.view({ workspaceId: alpha, channelRef, direction: 'before', limit: 5 }),
       observationsA0: source.threadObservations(human, { workspaceId: alpha, taskRef: thread.taskRef! }),

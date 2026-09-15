@@ -520,42 +520,60 @@ export interface AgentTeamClaimList {
 export interface AgentTeamInboxRequest {
   readonly workspaceId: WorkspaceId
   readonly limit?: number
-  /**
-   * Human direct-only slice: only Threads with at least one unread direct
-   * (mention) fact, and this call's `totalUnreadCount` counts direct facts
-   * only, so a badge built on it can never bypass follow unread. Rows on
-   * this slice carry their rendering preview (`channelName`, `taskNumber`,
-   * `previewText`); the ordinary projection stays body-free.
-   */
-  readonly directOnly?: boolean
+}
+
+/**
+ * One person as an Inbox row draws them: the Member id carries the shared
+ * identity hue, the handle the initial. A row names who moved a Thread without
+ * a per-row Member view, the same way it already carries its Channel's name.
+ */
+export interface AgentTeamInboxActor {
+  readonly memberId: AgentTeamMemberId
+  /** Public handle, or the raw Member id when the roster no longer names them. */
+  readonly name: string
 }
 
 /** One Thread summary containing no Message bodies. */
 export interface AgentTeamInboxItem {
   readonly channelRef: AgentTeamChannelRef
-  /** Direct-only slice: the owning Channel's display name, so a row renders without a per-row Channel view. */
+  /** The owning Channel's display name, so a row renders without a per-row Channel view. */
   readonly channelName?: string
   readonly task?: AgentTeamTask
-  /** Direct-only slice: the Task's ordinal inside its home Channel; absent on taskless Threads. */
+  /** The Task's ordinal inside its home Channel; absent on taskless Threads. */
   readonly taskNumber?: number
   readonly thread: AgentTeamThread
+  /** Unread facts waiting for this reader; always zero on the 「最近活跃」 slice. */
   readonly unreadCount: number
+  /** How many of them name this reader; always zero on the 「最近活跃」 slice. */
   readonly directCount: number
   /**
-   * Direct-only slice: the Thread's opening line, trimmed and capped at 120
-   * characters — the same bound the Thread page applies to its Task title.
-   * The newest unread fact's instant is `newestOccurredAt`, which on this
-   * slice reads as the row's latest-mention time.
+   * The Thread's opening line, trimmed and capped at 120 characters — the same
+   * bound the Thread page applies to its Task title. Row material only: it
+   * never reaches model-visible notification text.
    */
   readonly previewText?: string
   readonly newestSequence: number
-  /** Instant of the newest unread fact, from the same snapshot as newestSequence. */
+  /** Instant of the newest unread fact — on the 「最近活跃」 slice, of the newest fact. */
   readonly newestOccurredAt: string
+  /**
+   * Who committed the fact those two fields name — the person waiting for this
+   * reader on the queue, and whoever moved the Thread on the tail. Every Thread
+   * fact is committed by exactly one actor, so a row always names one.
+   */
+  readonly newestActor: AgentTeamInboxActor
   readonly attention?: AgentTeamThreadAttention
 }
 
 export interface AgentTeamInbox {
+  /** The unread queue: every Thread holding at least one unread fact for this reader. */
   readonly items: readonly AgentTeamInboxItem[]
+  /**
+   * Human readers only: the 「最近活跃」 slice — Threads this reader took part in,
+   * newest activity first, at most ten, excluding every Thread the queue above
+   * already carries. Agent readers always receive an empty slice, so the
+   * model-facing Inbox stays exactly the unread queue.
+   */
+  readonly recent: readonly AgentTeamInboxItem[]
   readonly totalUnreadCount: number
   readonly totalDirectCount: number
 }

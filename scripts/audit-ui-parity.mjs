@@ -125,6 +125,7 @@ const colorExceptions = new Set([
   'composer.module.css', // .sendButton static #fff on info fill (matches shipped)
   'conversation.module.css', // message clamp mask gradients + run divider shadow
   'sidebar.module.css', // avatar text #fff on the hue fill
+  'avatar-stack.module.css', // entry-stack avatar text #fff on the hue fill
 ])
 
 for (const file of readdirSync(clientDir).filter(name => name.endsWith('.module.css'))) {
@@ -263,7 +264,7 @@ const GEOMETRY = [
   ['sidebar.module.css', '.agentRow', [['border-radius', '8px']], 'list row radius is 8px'],
   ['sidebar.module.css', '.workspaceRow', [['border-radius', '8px']], 'list row radius is 8px'],
   ['sidebar.module.css', '.inboxCard', [['border-radius', '8px'], ['height', '34px']], 'the Inbox entry is a sidebar row: 8px radius, 34px height'],
-  ['sidebar.module.css', '.inboxBadge', [['height', '18px'], ['border-radius', '999px'], ['box-sizing', 'border-box']], 'the count badge is an 18px capsule; border-box keeps one digit a circle instead of a padded oval'],
+  ['countBadge.module.css', '.badge', [['height', '18px'], ['min-width', '18px'], ['border-radius', '999px'], ['box-sizing', 'border-box'], ['line-height', '18px'], ['flex', 'none']], 'every count is one 18px capsule in one place; border-box keeps one digit a circle instead of a padded oval, the line box is the capsule\'s own height so a surface inheriting `normal` cannot move the digit, and `flex: none` keeps a squeezed row from shrinking it'],
   ['inbox.module.css', '.row', [['border-radius', '8px']], 'the mention queue row shares the shipped 8px list-row radius'],
   ['inbox.module.css', '.rowTask', [['border-radius', '6px']], 'the Task marker on a queue row is a 6px chip'],
   ['composer.module.css', '.fileChip', [['border-radius', '6px']], 'chip radius is 6px'],

@@ -64,16 +64,17 @@ describe('Team presentation formatters', () => {
     expect(formatMessageTime('not-a-date', now)).toBe('')
   })
 
-  it('names today and yesterday on a queue row and dates everything older', () => {
+  it('shows today as a bare clock time, names yesterday, and dates everything older', () => {
     const now = new Date('2026-08-21T12:00:00')
-    expect(formatInboxTime('2026-08-21T03:05:00', t, now)).toBe('今天 03:05')
+    expect(formatInboxTime('2026-08-21T03:05:00', t, now)).toBe('03:05')
     expect(formatInboxTime('2026-08-20T23:40:00', t, now)).toBe('昨天 23:40')
     // Two days back is a date again, and the label agrees with the Message form.
     expect(formatInboxTime('2026-08-19T08:30:00', t, now)).toBe('08-19 08:30')
     expect(formatInboxTime('2025-12-31T23:59:00', t, now)).toBe('2025-12-31 23:59')
     expect(formatInboxTime('not-a-date', t, now)).toBe('')
-    // Calendar days, not 24-hour spans: 00:10 today is still today.
-    expect(formatInboxTime(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 10).toISOString(), t, now)).toBe('今天 00:10')
+    // Calendar days, not 24-hour spans: 00:10 today is still today, and today
+    // carries no day word at all.
+    expect(formatInboxTime(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 10).toISOString(), t, now)).toBe('00:10')
     // The precise instant stays available behind every relative label.
     expect(formatAbsoluteTime('2026-08-21T03:05:00')).toBe('2026-08-21 03:05')
     expect(formatAbsoluteTime('not-a-date')).toBe('')

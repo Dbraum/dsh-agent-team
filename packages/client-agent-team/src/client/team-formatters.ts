@@ -242,18 +242,20 @@ function calendarDayDelta(at: Date, now: Date): number {
 }
 
 /**
- * Queue label for one Inbox row's newest mention. The mention queue scans by
- * recency, so the two days a reader reasons about by name are named ("今天" /
- * "昨天") while everything older keeps the Message date form, so the row and
- * the Thread it opens agree about the same instant.
+ * Recency label for one Inbox row's newest fact, shared with the Channel feed's
+ * entry line so the two agree about the same instant. Today is a bare clock time
+ * — the reader is in today, and 「今天」 printed down every row spends the label's
+ * first word on the one segment that never varies, while `HH:mm` alone still
+ * reads as a clock because it is exactly one. The first day that is not today is
+ * the fact the reader has to be told, so it keeps its word; everything older
+ * keeps the Message date form, so the row and the Thread it opens agree.
  */
 export function formatInboxTime(occurredAt: string, t: TeamConversationProps['t'], now = new Date()): string {
   const at = new Date(occurredAt)
   if (Number.isNaN(at.getTime())) return ''
   const days = calendarDayDelta(at, now)
-  if (days === 0 || days === 1) {
-    return `${t(days === 0 ? 'inboxTimeToday' : 'inboxTimeYesterday')} ${pad(at.getHours())}:${pad(at.getMinutes())}`
-  }
+  if (days === 0) return `${pad(at.getHours())}:${pad(at.getMinutes())}`
+  if (days === 1) return `${t('inboxTimeYesterday')} ${pad(at.getHours())}:${pad(at.getMinutes())}`
   return formatMessageTime(occurredAt, now)
 }
 

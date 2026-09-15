@@ -121,6 +121,62 @@
   font-size: 11px;
   line-height: 20px;
 }
+/* One entry's state, leading the entry row: who is on this work and where it
+   stands. It sits on the reading path the body and the door already share, and
+   at the same x on every entry, instead of trailing the identity line where the
+   reader would have to cross the column for it — and where a continuation row,
+   which carries no identity of its own, would leave it floating alone. Shipped
+   rows lead with their state the same way (a SkillRow's collapsed leading slot,
+   a JobListAction trigger's dot before its count). */
+.stateCluster {
+  align-items: center;
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+}
+.statusWord {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 18px;
+}
+/* The entry's one line: state first, then the door. The state sits outside the
+   button, because a labeled button prunes its descendants from the accessibility
+   tree — the owner stack would lose the roster it names — and because the
+   control's name should say exactly what clicking it does. A 390 column can wrap
+   the door under the state rather than push the line past the reading column. */
+.entryLine {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 0;
+  max-width: 100%;
+}
+.entryRow {
+  align-items: center;
+  background: none;
+  border: 0;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  line-height: 18px;
+  padding: 2px 0;
+}
+.entryRow:hover,
+.entryRow:focus-visible { color: var(--dsw-alias-label-primary); }
+.entryRow:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 2px;
+}
+.entryArrow {
+  align-items: center;
+  display: inline-flex;
+  transition: transform 120ms ease;
+}
+.entryRow:hover .entryArrow,
+.entryRow:focus-visible .entryArrow { transform: translateX(2px); }
 /* Literal human text: the shared MessageText primitive, or segmented mention
    spans — both need the same pre-wrap metrics from this container. */
 .messageText {
@@ -141,7 +197,7 @@
 }
 /* The clamp's expand/collapse toggle: quiet text link under the preview.
    Block-level and shrink-wrapped so the control owns its line instead of
-   flowing beside a trailing entry card; feedback stays text-scoped — color
+   flowing beside a trailing entry row; feedback stays text-scoped — color
    and underline only, no background box past the characters. */
 .messageExpand {
   background: transparent;
@@ -281,32 +337,36 @@
 
 @media (prefers-reduced-motion: reduce) {
   .loadingMark { animation: none; }
+  .entryArrow { transition: none; }
+  .entryRow:hover .entryArrow,
+  .entryRow:focus-visible .entryArrow { transform: none; }
 }
 
-/* One run = one same-sender reply turn (message + task chip). It is a pure
-   grouping block: no hover border or fill — block boundaries are carried by
-   the turn divider, day anchors, and the unread line instead. The 2px
+/* One run = one same-sender reply turn (message + its Thread gate). It is a
+   pure grouping block: no hover border or fill — block boundaries are carried
+   by the turn divider, day anchors, and the unread line instead. The 2px
    vertical gap keeps adjacent runs visually separate. */
 .messageRun {
   margin: 2px 0;
   padding: 3px 0;
 }
 
-/* Inside one run, consecutive messages that carry their own Task entry chip
-   get a hairline separator; plain same-sender continuations stay seamless.
-   The expand/collapse control is excluded by data attribute — its presence
-   must not read as an entry boundary.
+/* Inside one run, consecutive messages that carry their own Thread entry get a
+   hairline separator; plain same-sender continuations stay seamless. The entry
+   line is identified by its own data attribute rather than by any button in the
+   body, so neither the expand/collapse control nor a Task ref link rendered
+   inside a body can read as an entry boundary.
    The line hugs the text column — inset past the hidden avatar (28px + 10px
    gap, level with the run divider label) and flush with the body's right
    edge — because it separates entries inside a run; structural boundaries
    (turn divider, day anchor, unread line) stay full-width. */
-.messageRow[data-grouped]:has(.messageBody > button:not([data-message-expand])) {
+.messageRow[data-grouped]:has([data-thread-entry]) {
   margin-top: 3px;
   padding-top: 7px;
   position: relative;
 }
 
-.messageRow[data-grouped]:has(.messageBody > button:not([data-message-expand]))::before {
+.messageRow[data-grouped]:has([data-thread-entry])::before {
   background: var(--dsw-alias-border-l2);
   content: '';
   height: 1px;
@@ -332,11 +392,11 @@
   margin: 2px 0 0 38px;
   padding: 5px 0 0;
 }
-.runDivider + .messageRow[data-grouped]:has(.messageBody > button:not([data-message-expand])) {
+.runDivider + .messageRow[data-grouped]:has([data-thread-entry]) {
   margin-top: 0;
 }
 
-.runDivider + .messageRow[data-grouped]:has(.messageBody > button:not([data-message-expand]))::before {
+.runDivider + .messageRow[data-grouped]:has([data-thread-entry])::before {
   content: none;
 }
 

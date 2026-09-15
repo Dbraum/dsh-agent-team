@@ -14,71 +14,6 @@
   margin-right: 6px;
 }
 
-.taskFooter {
-  align-items: center;
-  background: transparent;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  corner-shape: round;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-  display: inline-flex;
-  gap: 6px;
-  margin: 6px 0 0;
-  max-width: 100%;
-  padding: 2px 10px;
-  text-align: left;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.taskFooter:hover,
-.taskFooter:focus-visible {
-  background: var(--dsw-alias-interactive-bg-hover);
-  border-color: var(--dsw-alias-border-l3);
-  color: var(--dsw-alias-label-primary);
-}
-
-.taskFooter:focus-visible {
-  outline: 2px solid var(--dsw-alias-state-business-primary);
-  outline-offset: 2px;
-}
-
-.taskNumber {
-  color: var(--dsw-alias-label-primary);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 18px;
-}
-
-.taskStatus,
-.taskCount {
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 11px;
-  line-height: 18px;
-}
-
-/* Status label carries the shared Team status dot (running/review-pending/
-   done, todo ring, closed quiet). */
-.taskDot {
-  align-items: center;
-  display: inline-flex;
-  /* Fixed seat keeps every Task #N on one vertical axis across statuses. */
-  flex: none;
-  width: 8px;
-}
-
-/* The chevron rides inside a fixed-size seat so every card's arrow sits at
-   the same offset from its content; hover nudges it forward. */
-.taskArrow {
-  align-items: center;
-  color: var(--dsw-alias-label-tertiary);
-  display: inline-flex;
-  transition: transform 120ms ease;
-}
-
-.taskFooter:hover .taskArrow,
-.taskFooter:focus-visible .taskArrow { transform: translateX(2px); }
-
 /* The roster is a scrollable window of shared Member rows; the row owns its
    own identity, action and failure line. */
 .memberList {
@@ -90,11 +25,4 @@
 .modalBody {
   max-height: min(65vh, 520px);
   overflow-y: auto;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .taskFooter,
-  .taskArrow { transition: none; }
-  .taskFooter:hover .taskArrow,
-  .taskFooter:focus-visible .taskArrow { transform: none; }
 }

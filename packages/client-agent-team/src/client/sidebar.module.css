@@ -94,8 +94,11 @@
 }
 
 /* The Human mention-Inbox entry: a card above the Workspaces section on the
-   wide rail, a queue icon on the narrow rail. Both carry the same
-   cross-Workspace direct badge, hidden while it reads zero. */
+   wide rail, a queue icon on the narrow rail. Both mark unread the same way — a
+   dot on the icon's corner rather than a number beside it. The quantity is not
+   gone, it moved into the control's own name: what a reader scans the sidebar
+   for is whether anything waits, and the count answers a question asked on
+   purpose. */
 .inboxCard {
   align-items: center;
   background: transparent;
@@ -121,9 +124,8 @@
   outline: 2px solid var(--dsw-alias-label-primary);
   outline-offset: -2px;
 }
-.inboxCard > svg {
+.inboxCard .inboxMark {
   color: var(--dsw-alias-label-tertiary);
-  flex: 0 0 16px;
 }
 .inboxCardLabel {
   font-size: 14px;
@@ -134,35 +136,29 @@
   white-space: nowrap;
 }
 
-/* A count badge is a capsule: border-box keeps one digit an 18px circle
-   instead of padding it out to an oval, 999px pairs with the platform's
-   corner-shape opt-out the way every shipped capsule does, and the radius no
-   longer depends on the digit count. */
-.inboxBadge {
-  align-items: center;
-  background: var(--dsw-alias-state-business-primary);
-  border-radius: 999px;
-  box-sizing: border-box;
-  color: var(--dsw-alias-label-primary-foreground);
-  corner-shape: round;
+/* The mark is anchored to the glyph rather than to the control, so the wide card
+   and the 36px rail button put the same dot on the same corner of the same icon.
+   Zero renders no mark at all, which is the absence of unread rather than an
+   empty dot. */
+.inboxMark {
   display: inline-flex;
-  flex: 0 0 auto;
-  font-size: 11px;
-  font-weight: 600;
-  height: 18px;
-  justify-content: center;
-  line-height: 18px;
-  margin-left: auto;
-  min-width: 18px;
-  padding: 0 5px;
+  flex: 0 0 16px;
+  position: relative;
 }
-/* The rail badge sits inside the 36px control box: the rail region clips its
-   own overflow, so a badge hung past the button edge loses its right corner. */
-.railButton .inboxBadge {
-  margin-left: 0;
+/* Everything the sidebar still says about unread: the solid ink the queue uses
+   for a Thread that named the reader, at the size of a mark instead of a count.
+   The ring is the surface's own background, so the dot reads as a mark laid over
+   the icon's strokes rather than one blending into them. */
+.inboxDot {
+  background: var(--dsw-alias-state-business-primary);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--dsw-alias-bg-base);
+  corner-shape: round;
+  height: 8px;
+  left: -2px;
   position: absolute;
-  right: 0;
-  top: 0;
+  top: -2px;
+  width: 8px;
 }
 .railWorkspace {
   align-items: center;

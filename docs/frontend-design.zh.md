@@ -24,7 +24,7 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 | 列表行 | 8px 圆角；`aria-current="page"` 叶子行底色；hover `--dsw-alias-interactive-bg-hover` | `SidebarRoot.module.css .panelRow` |
 | 队列/结果行（双行） | 整宽按钮，8px 圆角、左右 8px 内缩，每条事实独占一行、各自省略，hover `--dsw-alias-interactive-bg-hover`，焦点环内缩。字号分级两行：主体 14px/22px primary；来源/元信息 12px/18px tertiary，其中显著片段（频道名）提到 secondary 600；行内 `Task #N` 是 6px、11px/15px 的小胶囊。哪一行承载哪条事实，由该面自己的信息顺序决定。 | `ui-workspace/src/client/rows/Rows.module.css .searchResultRow`（8px 圆角、8px 内缩、整宽按钮、hover 底色、14px 标题 + 12px 元信息） |
 | 胶囊与圆形 | 任何**实质无上限**的圆角——`border-radius: 50%`、`999px`，或等于盒子一半高度的 pill 圆角——都必须在同一条规则内配 `corner-shape: round`。平台把所有圆角面按 `superellipse(1.5)` 弯曲，会把正圆压成方圆、把胶囊两端切平；shipped 的全圆角块 100% 配对，审计对未配对者直接报错。 | `ui-theme/src/styles/corner-shape.css`；`Tag.module.css`、`StateDot.module.css`、`SidebarRoot.module.css .iconButton` |
-| 计数徽标 | 18px 胶囊：`border-radius: 999px` 配 `box-sizing: border-box`（单字符保持正圆，不被 padding 撑成椭圆），底色 `--dsw-alias-state-business-primary`、文字 `--dsw-alias-label-primary-foreground`，为 0 隐藏、超过 99 显示 `99+`，数字挂在控件的可访问名（`aria-label`）上，不能只存在于视觉徽标里。 | `Tag.module.css`（只读胶囊语言） |
+| 计数徽标 | 读者看到的每一处计数共用一枚胶囊，声明只有一份，在 `countBadge.module.css .badge`：18px 高、`min-width: 18px`，`border-radius: 999px` 配 `box-sizing: border-box`（单字符保持正圆，不被 padding 撑成椭圆），底色 `--dsw-alias-state-business-primary`、文字 `--dsw-alias-label-primary-foreground`，为 0 隐藏、超过 99 显示 `99+`，数字挂在控件的可访问名（`aria-label`）上，不能只存在于视觉徽标里。 | `Tag.module.css`（只读胶囊语言）；`countBadge.module.css .badge` |
 | 小胶囊 | 6px 圆角，`--dsw-alias-interactive-bg-hover` 底色 | `ReferenceChip.module.css .chip` |
 | 控件间距 | composer/侧栏工具组内兄弟控件间距 12px | `InputBar.module.css .tools/.trailing` |
 | 键盘焦点 | 可见焦点环：`outline: 2px solid var(--dsw-alias-label-primary)`；列表行 `outline-offset: -2px`，图标级控件 `1px`。`outline: none` 仅当同一条规则内有**环级替代**时才允许——outline、`box-shadow` 扩散、有边框控件的 `border-color`、文本控件的 `text-decoration`；只有底色/颜色属于 hover 反馈，不构成焦点指示（shipped 对小控件干脆保留 UA 默认环）。环色随控件含义：行与图标控件用 `label-primary`，composer/Thread 等输入邻接控件用 `business-primary`（shipped 把 business 锚定在输入、链接与表格滚动上）。豁免：`aria-activedescendant` listbox 行（mention 弹层）——焦点留在文本输入框，选中态由 `[aria-selected]` 呈现 | `SidebarRoot.module.css .panelRow:focus-visible`；`InputBar.module.css .add`（保留 UA 环，不写 `outline: none`） |
@@ -54,10 +54,12 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 | 页头 h1 | 20px/28px, weight 600 |
 | 发送者名 | 13px/20px, weight 600, primary；右侧同行跟随时间元信息 |
 | 消息时间 | 11px/20px, tertiary；当天 HH:mm，同年 MM-DD HH:mm，跨年完整日期（`formatMessageTime`，本地时区） |
-| Inbox 行时间 | 11px/18px, tertiary, `tabular-nums`；按读者本地日历日显示「今天 HH:mm」/「昨天 HH:mm」，更早回落消息时间形态，精确本地时刻挂在元素的 `title` 上 |
+| Inbox 行时间 | 11px/18px, tertiary, `tabular-nums`；今天只显示 `HH:mm`，上一个本地日历日显示「昨天 HH:mm」，更早回落消息时间形态，精确本地时刻挂在元素的 `title` 上。Thread 入口行的后续动态时间用的是同一个标签 |
 | Human 正文 | 14px/22px（`.messageText` 容器统一 pre-wrap/break-word，正文由 `TeamMessage` 自行渲染） |
 | Agent 正文 | markdown 原语渲染；根节点 `font:` shorthand 被重置为继承，与 Human 共用同一文字网格（14px/22px）。标题用聊天刻度（h1 17px、h2 16px、h3–h6 15px，margin 12px 0 4px），页面 h1 保持最高层级；段落/列表 margin 6px、`li + li` 间距 2px、strong 600；pre 8px 外边距 + 10px 12px 内边距、13px；表格 cell 纵向 padding 5px |
 | 任务/活动行 | 11–12px, tertiary, 活动行居中 |
+| Thread 入口行 | 12px/18px tertiary，`fit-content`；hover/focus-visible 只提亮文字并把 chevron 前推 2px |
+| 入口状态簇 | 11px/18px，领起入口行：18px 头像圈、8px 状态点、状态词、18px 未读胶囊（11px/600） |
 | 空/加载态 | 13px tertiary；加载点 8px 脉冲动画（reduced-motion 下关闭） |
 
 消息时间来自 Host 投影：`AgentTeamMessage.occurredAt` 与包裹它的 ledger 操作同源（旧账本在回放时归一化）。分组 run 只在 run 头部渲染名字与时间；run 内被折叠的消息若与上一条间隔 ≥5 分钟（`team-separators.ts` 的 `RUN_GAP_MINUTES`，`isRunGap` 单一权威判断），由回合分隔线补回它的时刻（见下）。
@@ -67,23 +69,24 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 - **Agent 头像**：按 `memberId` 字符串哈希出稳定色相（`hash*31+charCode mod 360`），`hsl(var(--team-avatar-hue) 42% 46%)` 底 + 白色首字母；同一成员跨页面、跨会话颜色不变。侧栏 Agent 行复用同一身份语言（24px 缩版），presence 指示叠在头像右下角，描边环取 `--dsw-specific-sidebar-fill` 与侧栏底色同色。
 - **Human 头像**：`--dsw-alias-state-business-primary` 强调底色，与所有 Agent 区分；DOM 上以 `[data-human]` 标记。
 - **presence 圆点**：available=done 绿、working=ongoing、error 红、unavailable 用灰色叉点（`TeamPresenceDot` 的 `presenceDotState` 映射）。这一映射有两种呈现：凡是「把成员列成行」的地方都用 `TeamMemberAvatar` 的角标（首字母 + 右下角圆点），而 composer 的收件人菜单用裸 `TeamPresenceDot`——那是菜单行不是花名册行。所以花名册行统一靠头像角标、菜单保留圆点，这个不对称是有意的，不是遗漏。
+- **Thread 入口头像叠放**：`TeamAvatarStack` 复用同一套色相哈希，但不挂 presence 圆点——它回答「谁在做这件事」，不回答「谁现在在线」。
 - 错误一律 `--dsw-alias-state-error-primary` 并配 `role="alert"`。
 
 ## 组件合同
 
 ### TeamMessage（消息行）
 
-- Props：`senderName`、`memberId`、`human`、`body`、可选 `occurredAt`（名字行时间元信息）、可选 `mentionHandles`（Human 正文中的 mention chip 集合）、可选 `senderTitle`（悬停显示成员描述）、`grouped`、`children`（渲染进 messageBody 尾部，承载任务卡等扩展）。
+- Props：`senderName`、`memberId`、`human`、`body`、可选 `occurredAt`（名字行时间元信息）、可选 `mentionHandles`（Human 正文中的 mention chip 集合）、可选 `senderTitle`（悬停显示成员描述）、`grouped`、`children`（渲染进 messageBody 尾部，承载入口行等扩展）。
 - 分组规则：相邻两条同为消息且 sender 相同才折叠；活动行会打断 run。折叠行隐藏头像与名字（`visibility:hidden` 保持栅格对齐），padding 收紧为 `2px`。
 - 头像首字母取 senderName 去掉 `@` 后首个字符大写。
 - 超长正文折叠：display 字符数超过 `MESSAGE_COLLAPSE_CHARS`（`team-formatters.ts` 单一权威，600）的正文默认收进限高预览（约 8 行 / 176px，底部 alpha 渐隐遮罩，不涂主题底色），预览下方「展开全文」安静文本钮展开，展开后同位置「收起」收回（`aria-expanded` 翻转）。按钮独占一行，反馈是文字级的（变色 + 下划线，无底色框）；markdown 根节点的 `font: inherit` 重置选择器按后代匹配（`.messageBody .messageMarkdown > div:first-child`），夹具容器不得隔断它，否则预览字号会大于展开态。夹具容器对可折叠正文**常驻**、展开/收起只切换类名——不能出现/消失式包裹，那会重挂载 Markdown 子树并丢掉渲染后注入的 ref 链接与 mention chip。是否折叠只由正文本身决定——确定性默认，无需持久化，也不构成 Host 事实；夹具只包正文分支，run 分组、附件条、兜底 chip 行与 children 都在夹具外照常渲染，预览内 ref/mention 照常可点。
 
 ### 消息块（messageRun）
 
-- 一个 run = 一次发言：同一 sender 连续的消息 + 其 Task 入口卡包进一个 `.messageRun` 块；活动行与未读边界打断 run。
+- 一个 run = 一次发言：同一 sender 连续的消息 + 其 Thread 入口行包进一个 `.messageRun` 块；活动行与未读边界打断 run。
 - 日界同样打断 run：跨天的相邻消息之间插入居中的日期锚（`.daySeparator`，`MM-DD`，跨年用完整 `YYYY-MM-DD`，与消息时间的数字风格一致）。活动没有自己的时钟 instant，继承前一条消息的日界、不触发锚；时间线的第一条消息不带头部锚。分块逻辑统一在 `team-separators.ts` 的 `chunkRunsWithDays`（单一权威实现）。
-- 块内分界：折叠行若自带 Task 入口卡（`.messageRow[data-grouped]` 且 `:has(.messageBody > button:not([data-message-expand]))`，长文折叠的展开/收起钮不算入口），上方画一条 border-l2 发丝线并稍增间距；普通文字接续不加线，避免整块被切碎。
-- 回合分隔线（`TeamRunDivider`）：同一 sender 的相邻消息间隔 ≥5 分钟即视为两次独立发言（agent 长发布常间隔小时级，纯折叠会抹掉层次与时刻），run 保持一块，但两者之间渲染全宽 border-l2 发丝线 + 线下首行标注后一条消息的时间（`formatMessageTime` 同款格式，`role="separator"`，缩进对齐正文列 38px=头像 28+间距 10）；该线替代其后折叠行自带的任务卡发丝线（相邻选择器覆盖），不叠双线。频道页与 Thread 页共用同一判断与组件。
+- 块内分界：折叠行若自带 Thread 入口行（`.messageRow[data-grouped]` 且 `:has([data-thread-entry])`），上方画一条 border-l2 发丝线并稍增间距；普通文字接续不加线，避免整块被切碎。锚点是入口行自己的 `data-thread-entry`，不是「正文里的某个 button」——长文折叠的展开/收起钮与正文里渲染出的 Task ref 链接都是 button，按 button 认边界会误判。
+- 回合分隔线（`TeamRunDivider`）：同一 sender 的相邻消息间隔 ≥5 分钟即视为两次独立发言（agent 长发布常间隔小时级，纯折叠会抹掉层次与时刻），run 保持一块，但两者之间渲染全宽 border-l2 发丝线 + 线下首行标注后一条消息的时间（`formatMessageTime` 同款格式，`role="separator"`，缩进对齐正文列 38px=头像 28+间距 10）；该线替代其后折叠行自带的入口行发丝线（相邻选择器覆盖），不叠双线。频道页与 Thread 页共用同一判断与组件。
 - run 是纯分组块，无 hover 边框/底色/阴影、无常驻边框——回合分隔线、日界锚与未读线承担全部消息边界感，run 自身只保留块间 2px 垂直空隙（`margin: 2px` + `padding: 3px`），不给内容"加笼子"。
 
 ### Mention 与 Task ref 强调
@@ -91,6 +94,13 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 - mention chip 渲染：Human 字面正文在字面分段时挂 chip，Agent plain-prose 正文复用同一条 `splitMentionNames` 分段，Agent 富 Markdown 正文则在公共 `MarkdownText` 渲染完成后于普通文字节点原位替换出 chip。三种路径都只挂 Message 已解析 mention 列表内的 handle（大小写不敏感、可选 `@`），且 effect 重跑不会对已生成的 chip 再包层；正文未出现的名字才落到尾部兜底 chip 行，不与内联 chip 重复。
 - 已知的 branded Task ref（`task:*`）通过 Host 的 `resolveTaskRefs` 批量解析，在 Human 字面文本、Agent plain-prose 和 Agent 富 Markdown 的原出现位置渲染为可点击的 `Task #N`；不再在富 Markdown 正文下方重复补入口。富 Markdown 在公共 `MarkdownText` 完成渲染后替换普通文字节点和"整段恰好是一个 ref"的行内代码（模型把 ref 当标识符加反引号样式是常态）；代码围栏、缩进代码、混合内容的行内代码和已有链接保留原文。模型输出的双冒号/大写拼写（如 `task::…`）在 `splitBrandedRefs` 解析口统一归一化为 ledger 铸造的单冒号小写 ref 后再解析与导航。
 - 点击当前视图未加载的 Task ref 时，Client 解析其所属 Workspace、Channel 和 Thread 后跨频道跳转；解析失败的 ref 保留为非导航原文。已解析链接用原始 ref 作为 tooltip。Task number（如 `Task #12`）是 Task 在其 home Channel 内的创建序号，Host 侧单一派生（`taskNumbers`），频道任务卡、Thread 标题、跨频道 ref 解析与 Agent inbox 标注共用同一口径；序号跨频道不唯一，稳定导航身份始终是 branded Task ref。
+
+### 计数胶囊（count capsule）
+
+- `TeamCountBadge.tsx` 配上 `countBadge.module.css .badge` 是**唯一**一枚计数胶囊，读者能看到的每一处计数都穿它：Channel feed 的 Thread 入口、以及 Inbox 队列行。同一套声明每面各写一份（共享之前就是如此），正是 feed 那一份落到与队列行不同的行盒、数字彼此差出一个像素的原因。侧栏「收件箱」入口**有意不在其列**：它把未读说成一个点而不是一个数字（见「Inbox（收件箱）」），因为读者扫侧栏问的是「有没有东西在等」，而数量随每一条 fact 变动、是**专门去问**才要的答案，所以它留在控件自己的可访问名里。
+- 这份规则是：高 18px、`min-width: 18px` 配 `box-sizing: border-box`（平台没有全局 border-box reset，否则内边距会把一位数字撑成椭圆）、`border-radius: 999px` 配 `corner-shape: round`、`display: inline-flex` 双向居中、11px/600 配 `font-variant-numeric: tabular-nums`（两位计数不会推动墨迹）、`line-height: 18px`——行盒就取胶囊自己的高度，而不是各面碰巧继承到的值（一面的入口行继承 `normal`，另一面自己设了高度），再加 `flex: none`，座位被挤时 Inbox 行不会把圆圈压小。定位仍留在挂胶囊的那个面上（`className`），因为窄轨要把它钉在 36px 图标盒内。
+- 计数为 0 不渲染任何东西：计数的缺失不是「一枚写着 0 的胶囊」。超过 99 显示 `99+`。`tone` 只换墨色：Thread 点名了这位读者时是实心底色，只是有新动静时用**完全相同的几何**画成 `--dsw-alias-border-l2` 发丝线——同一 Thread 再次被点名时行不会跳动。`label` 决定计数如何抵达读屏：有 label 时胶囊是 `role="img"`，由它的可访问名与 `title` 承载数字；没有 label 时是 `aria-hidden`，因为外层控件已经说了这个数。
+- 数字墨迹落在字体给它的位置上：墨迹中心由字体的 ascent/descent 不对称度、以及胶囊恰好落在哪个亚像素行决定，1× 光栅化可以把这不到半个像素的差取整成一像素的观感。没有任何声明能消除它——能保证的是三处共用同一条规则、不会互相漂移，而 `scripts/audit-ui-parity.mjs` 直接从这条规则上读这些声明，重新引入第二份拷贝会让审计报错。
 
 ### 成员花名册（member rosters）
 
@@ -127,10 +137,14 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 - 草稿缓存：draft/recipients 不在页面局部，而是按 `channel:<channelRef>` / `thread:<threadRef>` 键存入每 Client 上下文一份的 `TeamDraftStore`（`drafts.ts`，单一 localStorage 键 `dsh.agent-team.drafts.v1`，写穿持久化、按 savedAt 淘汰最旧 ~50 条）。切换视图或刷新后草稿与收件人原样恢复；发送提交成功即清除对应键，失败保留；Composer 挂载收敛会剔除不再匹配文本/已失效的收件人。Channel 的「作为任务」意图不进入草稿缓存：默认关闭，成功提交后再次复位关闭。
 - taskless Thread 的「转为任务」是 Human-only durable mutation，不做乐观 overlay。成功后重新读取 Thread 与补充 Channel/Member 投影；unread/stale fence 时保留 Host 返回错误并重新读取相关事实。
 
-### Thread / Task 入口卡（channel 时间线内）
+### Thread / Task 入口行（channel 时间线内）
 
-- 语义：每个 top-level 频道消息进入其 Thread 的唯一入口。taskful Thread 展示 `Task #N`、任务状态与消息计数；taskless Thread 展示本地化的 Thread/讨论 label 与消息计数。二者均点击 `selectThread`，不把 Task 作为独立导航层。`Task #N` 是 home Channel 内 durable Task creation 的展示编号，不是稳定身份；跨视图导航使用 branded Task ref。
-- 形态合同：taskful 卡为 fit-content 紧凑胶囊（细边框 quiet 默认态），内容 `状态点` · `Task #N`(600) · 状态 · 计数 · chevron 图标；taskless 卡保留本地化 Thread/讨论 label · 计数 · chevron，但没有虚构的状态点或 Task status。箭头位置由内容流构造保证一致，不使用全宽拉伸。状态点用 `taskStatusDot` 映射，五个状态全有点、8px 固定座位保证各卡同轴：in_progress=ongoing 蓝圈、in_review=warning 琥珀、done=done 绿（复用 DSH `StateDot`，与 presence 同语言）；todo=空心圆环（未开始的空位）、closed=tertiary 灰实心点带 10% 光晕（镜像 StateDot 几何的 `.taskDotQuiet`）。hover/focus 渐进反馈：底色与边框提升、箭头右移 2px（120ms 过渡，reduced-motion 下关闭）；focus-visible 用主题色 outline。状态与计数用 tertiary 弱化，`aria-label` 依卡型采用 `openTask` 或 `openThread` 文案。
+- 语义：每个 top-level 频道消息进入其 Thread 的唯一入口，形态是正文下方**一行**安静的行——既陈述状态，也负责开门。点击走 `selectThread`，不把 Task 作为独立导航层。`Task #N` 是 home Channel 内 durable Task creation 的展示编号，不是稳定身份；跨视图导航使用 branded Task ref。
+- 方位（本条的硬约束）：入口的任何状态都**不放在身份行上**。一个 run 里的后续消息没有自己的身份行内容，状态簇停在那里只会孤零零地悬在行尾；而任何靠右的落点都要读者为真正想看的价值横穿整列。状态改为**领起入口行**——与上方正文同一个左缘，且整条 feed 的所有入口共用一个 x；shipped DSH 的行也是这么做的（`SkillRow` 折叠态的首位槽、`JobListAction` 触发钮「点在前、计数在后」）。
+- 状态簇（`.stateCluster`）：taskful 入口依次是 Task **在办 Claim 的所有者头像叠放**、`taskStatusDot(status)` 对应的 8px `TeamStateDot`、本地化状态词——`in_progress`→ongoing、`in_review`→warning、`done`→done 走共享 `StateDot`，`todo` 是空心圆环、`closed` 是 tertiary 安静点，五个状态共用同一套形态语言。Claim 是 Host 事实而非装饰：只有 `in_progress`/`in_review` 的 Task 才有所有者，`released` 的 Claim 已不是工作，所有者按 Claim 顺序去重，done/closed 的 Task 不留叠放——那段历史状态词已经说完了。taskless 入口不虚构状态点。`TeamAvatarStack` 是 18px 交叠圆圈，用共享成员色相，最多 3 枚 + `+N` 一枚；圆圈本身是装饰，所以整个叠放是一个 `role="img"`，标签写出完整名单（`claimers`）。
+- 入口行的其余部分：12px/18px tertiary、`fit-content`、自身无底色无边框——hover 与 `:focus-visible` 只把文字提亮到 primary 并把 chevron 前推 2px（120ms，reduced-motion 下关闭），焦点环 2px 主题色。状态之后接「这条入口是什么」：taskful 是 `Task #N`；taskless 在有后续动态时是本地化 Thread label，入口消息仍是最新事实时是 `replyAction`（回复）。有后续动态时追加 `· 最近活动 <HH:mm>`，与 Inbox 行同一个近度标签——今天就是裸时刻，只有「不是今天的第一天」才带日子词（`昨天 HH:mm`）——判据是 Host 的 `lastActivityAt` 不同于入口消息自己的 `occurredAt`，即「这条消息之后事情又动过」；精确本地时刻挂控件的 `title`。**消息计数已退场**：这里读者真正要行动的量是未读，不是正文有多少。390 窄列下入口行整体换行（`flex-wrap`）：门文案落到状态下一行，而不是把行撑出阅读列。
+- 未读胶囊：计数「这条 Thread 上有多少需要**我**」的动态，也是 taskless 讨论唯一能携带的簇成员。数据来自频道本次 refresh 本就要发的 Workspace Inbox 整片未读——Host 的三类合并判断（我 follow 的 Thread 上的活动、提到我的、我的 Task/Claim 变化）才是权威；Client 用 `threadRef` join 进列表，**绝不**用 `item.mentions` 自行推导。未读为 0 是「没有徽标」而不是「显示 0」，超过 99 显示 `99+`。它就是共享计数胶囊（见「计数胶囊」），因此不会与侧栏入口、Inbox 行之间产生漂移。未读读取失败时**清空徽标**而不是展示读者已不能信任的计数，并按其他读取失败同样的 inline 失败行走文案。
+- `aria-label` 依卡型与计数：未读为 0 用 `openTask`/`openThread`，带计数用 `openTaskUnread`/`openThreadUnread`。胶囊本身 `aria-hidden`，计数经这枚「开门」控件自己的 label 抵达读屏——这也正是把数字与它所属 Thread 绑在一起的通道。状态簇留在控件**外面**：带 label 的 button 会把后代从可访问性树上剪掉，放进去等于让所有者叠放自己的名字沉默。
 
 ### 状态胶囊与弹层
 
@@ -147,15 +161,15 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 - 频道编辑器（`编辑频道`）：名称/说明输入框 + 成员增删字段集。保存钮无改动即禁用（dirty 门），提交走 `updateChannel` Remote（幂等 request 同载荷复用），成功后由投影刷新回填行文案——不做乐观行内改名；成员增删仍走既有 join/remove Remote（request 按 方向+成员+频道 键复用）。
 - Agent 编辑器（`编辑 Agent`）：名称/说明输入框 + 模型选择。模型选择复用公共 `Menu` 原语：触发钮呈 Input 形态（当前值 + 旋转 chevron），选项首行「跟随全局默认」，其后按 provider 分组标题 + 模型行、选中尾勾；目录经宿主级 `llm.models` 取得，不依赖任何活跃会话。提交走 `updateMember` Remote：缺省模型即清除覆盖（回到 Host 默认继承）；改模型对活跃成员原地更新 live model selection，保持 Agent 与 Session 身份不变，后续请求使用新选择；纯展示编辑不重启。Agent 创建流程没有频道选择页，Agent 编辑器没有成员区块——频道成员只在频道侧管理（创建对话框初始成员、频道编辑器成员行、成员管理对话框）；未入频道的 Member 仍可经 DM 触达。
 - Agent 卡片会话视图：Agent 行的头像与文案整体是选择按钮（`打开 {name} 的会话`），点击不再退出 Team 模式——导航快照保留当前 Channel/Thread，并叠加运行时字段 `memberSessionId`（附 `returnToSessionId`，均不持久化），再调用 `sessions.open(memberSessionId)`；`conversation` 影子此时让位，由 shipped 会话根在 Team 侧栏之间渲染该成员会话。任何显式 Team 导航（选工作区/频道/Thread）都会关闭成员视图并恢复该 Team 位置；页脚「对话」关闭成员视图、还原 `returnToSessionId` 后离开 Team，普通外壳不会停在成员会话里。Member 经 `context_rollover` 换新上下文时，Agents 面板观察该 Member 的旧→新 Session 绑定，仅在嵌入页正是被观察的旧 live Session id 时恰好跟随一次，归档视图不跳转。
-- 窄屏 rail 三个图标按钮自上而下：提到我（`IconQueueOutline14`，16px）→ 频道（`IconListPenOutline16`）→ Agents（`IconAgentPresetOutline16`）；不复用 checklist（任务）或 user（成员）图标。提到我图标是目的地：点击打开 Inbox 页并请求展开侧栏；频道/Agents 图标点击请求展开侧栏并聚焦对应分区头部。
-- 「提到我」入口：宽栏是 Workspaces 节之上的一张卡片，窄轨是 rail 第一枚图标；两者挂同一枚跨 Workspace direct 徽标（各可见 Workspace directOnly Inbox 合计），为 0 隐藏，超过 99 显示 `99+`。视觉徽标是 `aria-hidden`，数字经控件的 `aria-label` 抵达读屏（宽窄两处一致）。窄轨上徽标落在 36px 图标盒**内部**——rail 区域会裁剪自身溢出，挂在按钮外的徽标会被切掉右侧圆角。Inbox 页打开时卡片/图标携带 `aria-current='page'`。
+- 窄屏 rail 三个图标按钮自上而下：收件箱（`IconQueueOutline14`，16px）→ 频道（`IconListPenOutline16`）→ Agents（`IconAgentPresetOutline16`）；不复用 checklist（任务）或 user（成员）图标。收件箱图标是目的地：点击打开 Inbox 页并请求展开侧栏；频道/Agents 图标点击请求展开侧栏并聚焦对应分区头部。
+- 「收件箱」入口：宽栏是 Workspaces 节之上的一张卡片，窄轨是 rail 第一枚图标；两者用同一套方式标记未读——图标**左上角一个点**，数值取各可见 Workspace 的整片未读 Inbox 合计（mention 只是其中一类），为 0 时不渲染：没有未读就是没有这个记号，而不是画一个空点。点是 8px 的 `--dsw-alias-state-business-primary`——队列给「点名了这位读者」的 Thread 用的同一种实心墨，于是同一个颜色走到哪里都还是「这需要你」——外加 2px `--dsw-alias-bg-base` 描边（两侧 rail 的底色正是它），因此它读起来是压在图标笔画上的一个记号，而不是与笔画糊在一起。点挂在图标自己的包裹层（`.inboxMark`：`position: relative`、`flex: 0 0 16px`）上、两轴各 `-2px`，因此无论那枚图标坐在 34px 卡片里还是 36px rail 按钮里，点都落在同一个字形的同一个角上；在窄轨上它也始终留在 rail 区域会裁剪到的那个 36px 控件盒内部。数字没有消失，只是搬了家：宽窄两处的可访问名都报出它（`收件箱，6 条未读`，与点代表的是同一个合计），窄轨还把同一句作为悬停提示重复一次——数量只需一次 hover，侧栏本体永远不印数字。Inbox 页打开时卡片/图标携带 `aria-current='page'`。
 - `TeamConversation` 第四个面：Thread | Channel | Inbox | welcome。选 Inbox 清掉 Channel/Thread 面；选 Workspace、Channel 或 Thread 清掉 Inbox。从 Inbox 行进入 Thread 后，Back 落在该行 Thread 的频道——Inbox 不进返回栈；再进 Inbox 走左侧卡片或窄轨图标。
-- Inbox 页：页面走**共享对话座位**——与 Channel/Thread 相同的页头带、880px 居中阅读列、`clamp(18px, 3vw, 36px)` 边距与稳定 scrollbar gutter，切换面时内容列不位移。页头除 h1 外还有一行计数（单行省略：窄座位下不许把页头折成多行）。对每个可见 Workspace 发一次 directOnly Inbox 调用，合并成**单一时间降序**——跨 Workspace 最新 mention 在前，同一时刻用 ledger sequence 破平（各 Workspace 切片自带 Host 行序，那只是 Host 的截断策略，不是展示顺序）；打开页不确认任何内容——打开页不是 read，只有点开行的 durable Thread read 清 marker 与徽标。行是整宽的 8px 圆角队列行，形态取自 shipped 双行结果行（左右 8px 内缩、共享 `--dsw-alias-interactive-bg-hover` 底色、焦点环内缩），承载 Human 定死的信息顺序：(1) 一行面包屑 `workspace / #channel`，taskful 加 6px 的 `Task #N` 小胶囊；(2) Thread 开头行，直接渲染 Host `previewText`（120 字帽），独占一整行 14px/22px primary；(3) 最新 mention 时刻右对齐在面包屑行上，11px tertiary `tabular-nums`——按读者本地日历日命名队列读者真正会推理的两天「今天 HH:mm」/「昨天 HH:mm」，更早回落消息时间形态（同年 `MM-DD HH:mm`、跨年完整日期），精确本地 `YYYY-MM-DD HH:mm` 挂在元素的 `title` 上。点击行选择该行 Workspace 并打开 Thread。空态讲**共享空态语言**（与 Channel/Thread 同一套 13px `strong` 标题 + 12px 提示），文案「还没有人提到你」+「需要你知道或做决定时，成员会提到你」；loading/error/retry 复用共享对话类，后台刷新失败保留行并以 `role='alert'`、`--dsw-alias-state-error-primary` 报告。
-- 刷新语义：Inbox 页打开时订一次无 scope 的 changes，唤醒重拉列表，离开即停；徽标同法订阅，唤醒只重拉合计（`limit: 1`），绝不拉列表。徽标还会在每次 durable Thread read 完成后直接刷新——Host 的 changes 对 read 刻意不唤醒（read 不改变任何共享 projection），但该 read 消费了读者自己的 mention marker。
+- Inbox 页：页面走**共享对话座位**——与 Channel/Thread 相同的页头带、880px 居中阅读列、`clamp(18px, 3vw, 36px)` 边距与稳定 scrollbar gutter，切换面时内容列不位移。页头除 h1 外还有一行计数，形态是**分段而不是句子**——读者扫数字而不必解析从句：Thread 数、页面真正关心的整片未读数（primary 600 墨色，两侧保持 secondary）、以及提及总数（**仅当队列里真有提及时才出现**）；分段之间只靠间距分隔，窄座位换行时不会把标点拖到行首——每一段本来就自带单位词。对每个可见 Workspace 发一次 Inbox 调用，合并成**单一时间降序**——跨 Workspace 最新未读在前，同一时刻用 ledger sequence 破平（各 Workspace 切片自带 Host 行序，那只是 Host 的截断策略，不是展示顺序）。页面按 Host 的两片渲染：上段「需要我」＝未读队列（页头那段计数只数它），下段「最近活跃」＝读者写过 Message 的 Thread——回复过的无论是否 follow 都算他的，自己发起、还没人回复的也算——按最新活跃降序、跨 Workspace 合计上限 5、与上段不重复——两段共用同一个行组件，下段的行没有未读计数（零＝不渲染胶囊，而不是渲染一枚写着 0 的胶囊），但**保留每一行都有的那条领起列**：行是 grid，第一轨就是「谁」自己的 18px 加行内 8px 间距，身份与摘要在两段里都落在同一条列上，于是同一 Thread 在两段之间移动时不会横跳；打开页不确认任何内容——打开页不是 read，只有点开行的 durable Thread read 清 marker 与徽标。行是整宽的 8px 圆角队列行，形态取自 shipped 双行结果行（左右 8px 内缩、共享 `--dsw-alias-interactive-bg-hover` 底色、焦点环内缩），排布是一个 grid，第一轨属于这一行最新一动的那个人（18px 加行内 8px 间距）：Member 圆点挂在里面、每一行都有（无论有没有未读）——为计数预留的槽位在没有未读的 Thread 上永远是空的——行说的每一句都从它之后那一列起——身份行、它下方的摘要、以及上方的段标题共用同一条左缘（距行缘 34px），而改前一行有两条（计数与摘要 8px、溯源 34px）、段标题还有第三条。行承载 Human 定死的信息顺序：(0) 每行以「谁刚动过」领起——Host 解析这一行时刻背后的人（`newestActor`），行不必自己拿 Member 视图就能把他画成共享的 18px Member 圆点，这也正是 Channel 时间线里 Thread 入口行领起的同一套语法；(1) 身份行——频道用 13px/20 primary 600 领起，只有当屏幕上的行跨了不止一个 Workspace 时前面才加 `workspace / `（把同一个名字印满每一行，是拿行里最好读的位置去放一个常量；一旦第二个 Workspace 进入列表它自己就回来，因为那时两行必须还能分辨），taskful 时后面接同一枚发丝线 chip `Task #N`。这一行**保持为一个文本节点串**，分隔符本身就是独立文本节点，因为拆成多个样式化子项会丢掉控件可访问名里的空格；同时它用省略号压成一行：窄座位缩短溯源，而不是把一行折成三行，`overflow: hidden` 则保证比座位还宽的频道名不会把滚动条推进共享 timeline。身份是队列读者扫读的对象，所以由它承担整行的墨色；在改前，摘要拿着最重的墨、身份反而最轻，一页读下来是十段黑字而不是十个条目；(2) 计数胶囊收在身份行右端、与时刻相隔一个行内间距——共享计数胶囊（见「计数胶囊」）：Thread 点名了这位读者时是实心底色，只是有新动静时用**完全相同的几何**画成 `--dsw-alias-border-l2` 发丝线，于是两种未读共用一套语法、只靠墨色区分，Thread 再次被点名时行也不会跳动；计数超过 99 显示 `99+`，其中的提及拆分经胶囊自身的 label 抵达读屏与 hover——行的可见文本始终是 Thread 本身，不再有第二枚可见计数；(3) 下方的摘要——直接渲染 Host `previewText`（120 字帽），13px/20 secondary，落在身份行自己那一列、只占一行，因为它是身份的佐证，而不是这一行的主题；(4) 最新时刻跟在计数之后收在身份行末端，11px tertiary `tabular-nums`——今天就是裸 `HH:mm`（读者就在今天里，而把日子词印满每一行等于把标签的第一个词花在永远不变的那一段上），「不是今天的第一天」用「昨天 HH:mm」，更早回落消息时间形态（同年 `MM-DD HH:mm`、跨年完整日期），精确本地 `YYYY-MM-DD HH:mm` 挂在元素的 `title` 上。每个段标题自带本段的条数——队列的条数，以及被截到五条的「最近活跃」实际在屏上的条数——同样内缩到那条 34px 的列上，读者不必数行就知道这一段有多少。点击行选择该行 Workspace 并打开 Thread。空态讲**共享空态语言**（与 Channel/Thread 同一套 13px `strong` 标题 + 12px 提示），文案「收件箱是空的」+「你参与的 Thread 有新活动、或有人提到你时，会出现在这里」；loading/error/retry 复用共享对话类，后台刷新失败保留行并以 `role='alert'`、`--dsw-alias-state-error-primary` 报告。
+- 刷新语义：Inbox 页打开时订一次无 scope 的 changes，唤醒重拉列表，离开即停；徽标同法订阅，唤醒只重拉合计（`limit: 1`），绝不拉列表。徽标还会在每次 durable Thread read 完成后直接刷新——Host 的 changes 对 read 刻意不唤醒（read 不改变任何共享 projection），但该 read 消费了读者自己的未读（含 mention marker）。
 
 ## 数据刷新语义
 
-- channel 视图：change 事件触发 `refresh()` 时按 `messageRef` 去重合并新窗口与已加载历史（`mergeChannelView`），cursor 取更旧者，`hasMore = fresh.hasMore || current.cursor < fresh.cursor`。
+- channel 视图：change 事件触发 `refresh()` 时按 `messageRef` 去重合并新窗口与已加载历史（`mergeChannelView`），cursor 取更旧者，`hasMore = fresh.hasMore || current.cursor < fresh.cursor`。新窗口对它覆盖到的每条消息**权威**——change 唤醒必须让该行的活字段（Task 状态、最新时刻、未读）跟着新事实一起动——而更早加载的历史消息保留而不是丢弃。每次 refresh 还会读一次 Workspace Inbox 切片并据此重建「threadRef → 未读」映射；该读取失败则清空映射。
 - thread 视图：被动事实合并进 currentFacts；打开与到达的读取全部自动推进 durable read pointer（有界批次余量由串行续读循环清零），`newFactsCount` 仅驱动纯跳转提示。
 - `loadOlder` 有并发保护（loadingOlder 状态禁用按钮）。
 
@@ -174,6 +188,7 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 - 行内 ⋯ 菜单按钮带 `aria-label`（`{name} 的操作`）与 `aria-expanded/haspopup`；菜单项由公共 `Menu` 提供完整键盘与外点关闭路径。
 - listbox/option 完整键盘闭环（见 composer 一节）；Channel composer 的「作为任务」使用原生 button 的 `aria-pressed`，Space/Enter 均可切换。
 - 图标按钮均有 aria-label；装饰元素 `aria-hidden`。
+- Thread 入口的「开门」控件是一枚原生 button，label 同时携带 Thread 与它的未读数；旁边画出的胶囊 `aria-hidden`，头像叠放是单个带标签的 `role="img"`，且刻意留在按钮之外以保住它自己的可访问名。
 - 消息时间线区域使用专用 `timelineLabel`（"消息时间线"），不误用频道/参与者标签；Thread 内部事实分组段不带重复的区域标签。
 - 未读分界线 `role="separator"` 仅作信息展示（不再驱动滚动定位）；run 内回合分隔线同样 `role="separator"`，可访问名称即其标注的时刻。
 - 新增可见 UI 必须通过 `npm run test:browser` 的桌面 1440×960、窄屏 390×844 和键盘检查（见 `development.md`）。

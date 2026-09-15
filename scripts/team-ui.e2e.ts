@@ -1,7 +1,7 @@
 import { cp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { chromium, type Browser, type Page } from 'playwright'
+import { chromium, type Browser, type Locator, type Page } from 'playwright'
 import { launchWebScaffold, acknowledgeReloadConnectionLoss, watchConsole, type WebScaffold } from './scaffold.ts'
 import { connectFreshWorkspaceZh } from './support.ts'
 
@@ -38,6 +38,151 @@ async function settleAnimations(page: Page): Promise<void> {
     const timing = animation.effect?.getTiming()
     return timing === undefined || timing.iterations === Infinity || animation.playState !== 'running'
   }))
+}
+
+/**
+ * What a control's focus ring actually renders, plus whether the browser counts
+ * the focus as keyboard-visible at all. A ring the reader never sees is not
+ * evidence, so the assertion has to read `:focus-visible` too.
+ */
+async function focusRing(page: Page, selector: string): Promise<{
+  readonly focusVisible: boolean
+  readonly outlineStyle: string
+  readonly outlineWidth: string
+  readonly outlineColor: string
+} | null> {
+  return page.evaluate((sel) => {
+    const target = document.querySelector(sel)
+    if (target === null) return null
+    const style = getComputedStyle(target)
+    return {
+      focusVisible: target.matches(':focus-visible'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+      outlineColor: style.outlineColor,
+    }
+  }, selector)
+}
+
+/**
+ * Settle a viewport change all the way. The responsive sidebar starts its slide
+ * on the frame *after* the resize, so a single animation check can pass before
+ * the transition exists and the screenshot lands mid-flight — frozen expanded
+ * column clipped to the rail. Two quiet frames later, re-check.
+ */
+async function settleLayout(page: Page): Promise<void> {
+  await settleAnimations(page)
+  await page.evaluate(() => new Promise<void>(resolve => {
+    requestAnimationFrame(() => { requestAnimationFrame(() => { resolve() }) })
+  }))
+  await settleAnimations(page)
+}
+
+/**
+ * One Task's Thread door in the Channel feed. The door button carries the
+ * accessible name — with or without an unread count, so the prefix form has to
+ * carry the full-width opening bracket — while the entry line
+ * (`data-thread-entry`) is the row that holds the state cluster beside it.
+ * `:has()` keeps the exact/prefix pair on one button, so `Task #1` can never
+ * resolve to `Task #10`.
+ */
+function taskEntrySelector(taskNumber: number): string {
+  return `[data-team-channel] [data-thread-entry]:has(> button[aria-label="打开 Task #${taskNumber}"], > button[aria-label^="打开 Task #${taskNumber}（"]) > button`
+}
+
+/** The entry line (`data-thread-entry`) one Task's door belongs to. */
+function taskEntryLineSelector(taskNumber: number): string {
+  return `[data-team-channel] [data-thread-entry]:has(> button[aria-label="打开 Task #${taskNumber}"], > button[aria-label^="打开 Task #${taskNumber}（"])`
+}
+
+/** One Task's Thread door: the locator form of {@link taskEntrySelector}. */
+function taskEntryRow(page: Page, taskNumber: number) {
+  return page.locator(taskEntrySelector(taskNumber))
+}
+
+/**
+ * Left edges of one entry's state cluster, the entry line it leads, and the
+ * reading column holding both it and the body above it. All three meet when the
+ * state opens the entry line — the path the reader's eye already follows — and
+ * diverge when it is parked at a line's far end instead. The column is the
+ * message body box itself rather than a positional child, because a grouped row
+ * that carries no time of its own renders no identity line at all.
+ */
+async function entryClusterEdges(page: Page, lineSelector: string): Promise<{ readonly cluster: number; readonly row: number; readonly column: number } | null> {
+  return page.evaluate((selector) => {
+    const line = document.querySelector(selector)
+    const cluster = line?.firstElementChild
+    const column = line?.parentElement
+    if (line === null || line === undefined || cluster === null || cluster === undefined || column === null || column === undefined) return null
+    return {
+      cluster: Math.round(cluster.getBoundingClientRect().left),
+      row: Math.round(line.getBoundingClientRect().left),
+      column: Math.round(column.getBoundingClientRect().left),
+    }
+  }, lineSelector)
+}
+
+/**
+ * The Channel feed's state column: the left edge of every entry line's state
+ * cluster. A Taskful entry always carries one — a status dot and word at
+ * minimum — so these x values are what a reader's eye scans down.
+ */
+async function taskEntryClusterLefts(page: Page): Promise<readonly number[]> {
+  return page.evaluate(() => {
+    const edges: number[] = []
+    for (const line of document.querySelectorAll('[data-team-channel] [data-thread-entry]')) {
+      const cluster = line.firstElementChild
+      if (cluster !== null) edges.push(Math.round(cluster.getBoundingClientRect().left))
+    }
+    return edges
+  })
+}
+
+/**
+ * What decides where the digit sits and how wide the capsule runs. Three copies
+ * of these declarations is how the count drifted between the sidebar's Inbox
+ * entry, the Channel feed's Thread entry, and the Inbox queue's own rows; one
+ * component means one answer, and this reads that answer off the assembled
+ * bundle instead of trusting the source.
+ */
+function readCountCapsule(element: Element): {
+  readonly text: string
+  readonly hidden: string | null
+  readonly background: string
+  readonly shape: Record<string, string>
+} {
+  const style = getComputedStyle(element)
+  return {
+    text: element.textContent?.trim() ?? '',
+    hidden: element.getAttribute('aria-hidden'),
+    background: style.backgroundColor,
+    shape: {
+      font: style.font,
+      fontVariantNumeric: style.fontVariantNumeric,
+      lineHeight: style.lineHeight,
+      height: style.height,
+      minWidth: style.minWidth,
+      padding: style.padding,
+      boxSizing: style.boxSizing,
+      display: style.display,
+      alignItems: style.alignItems,
+      justifyContent: style.justifyContent,
+      radius: style.borderTopLeftRadius,
+      cornerShape: style.getPropertyValue('corner-shape'),
+    },
+  }
+}
+
+/**
+ * The unread capsule an entry carries, found by the shared count badge's own
+ * attribute: CSS-module class names are hashed by the build, and one component
+ * now wears every count, so the attribute — not a class name and not a guessed
+ * shape — is the contract. Computed style is the evidence that the single rule
+ * actually reached the page.
+ */
+async function entryUnreadCapsule(page: Page, lineSelector: string): Promise<ReturnType<typeof readCountCapsule> | null> {
+  const capsule = page.locator(`${lineSelector} [data-team-count-badge]`).first()
+  return await capsule.count() === 0 ? null : await capsule.evaluate(readCountCapsule)
 }
 
 async function installLocalBundle(): Promise<void> {
@@ -915,7 +1060,60 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   const preOpenInbox = scaffold.ctx.agentTeam.inbox({ workspaceId: workspace.id })
   const preOpenThread = preOpenInbox.items.find(item => item.task?.taskRef === task.taskRef)
   expect(preOpenThread?.unreadCount ?? 0).toBeGreaterThanOrEqual(3)
-  await page.getByRole('button', { name: /Task #1/ }).click()
+  // The Channel feed says what the Host says. The entry row carries this
+  // reader's unread for its Thread, so the count lives in the row's accessible
+  // name rather than only in the capsule's pixels — and it arrives without a
+  // reload, because a Thread reply wakes the Channel scope.
+  const unreadLineSelector = taskEntryLineSelector(1)
+  const unreadEntryRow = taskEntryRow(page, 1)
+  const unreadTotal = preOpenThread!.unreadCount
+  await expect.poll(async () => await unreadEntryRow.getAttribute('aria-label'), { timeout: 10_000 })
+    .toBe(`打开 Task #1（${unreadTotal} 条新动态）`)
+  await expect.poll(async () => (await entryUnreadCapsule(page, unreadLineSelector))?.text ?? 'missing', { timeout: 10_000 })
+    .toBe(unreadTotal > 99 ? '99+' : String(unreadTotal))
+  const unreadCapsule = await entryUnreadCapsule(page, unreadLineSelector)
+  // The capsule is decoration inside a labeled control, and it is a capsule:
+  // a filled 18px pill whose radius covers its own height.
+  expect(unreadCapsule?.hidden).toBe('true')
+  expect(unreadCapsule?.shape.height).toBe('18px')
+  expect(unreadCapsule?.background).not.toBe('rgba(0, 0, 0, 0)')
+  expect(Number.parseFloat(unreadCapsule?.shape.radius ?? '0')).toBeGreaterThanOrEqual(9)
+  // The state leads its entry row: it opens where the body and the door text
+  // open, on one x for every entry, instead of trailing a line the reader has
+  // to cross the column for.
+  const clusterEdges = await entryClusterEdges(page, unreadLineSelector)
+  expect(clusterEdges).not.toBeNull()
+  expect(clusterEdges!.cluster).toBe(clusterEdges!.row)
+  expect(clusterEdges!.cluster).toBe(clusterEdges!.column)
+  const stateColumn = await taskEntryClusterLefts(page)
+  expect(stateColumn.length).toBeGreaterThanOrEqual(2)
+  expect(new Set(stateColumn).size).toBe(1)
+  await unreadEntryRow.scrollIntoViewIfNeeded()
+  await settleAnimations(page)
+  await page.screenshot({ path: join(UI05_SHOTS, 'thread-entry-unread.png'), fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await settleLayout(page)
+  await unreadEntryRow.scrollIntoViewIfNeeded()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await unreadEntryRow.focus()
+  await settleAnimations(page)
+  await page.screenshot({ path: join(UI05_SHOTS, 'thread-entry-unread-narrow.png'), fullPage: true })
+  await page.setViewportSize({ width: 1440, height: 960 })
+  await settleLayout(page)
+  // Keyboard: the entry is one control and the focus ring is the only chrome it
+  // grows. Tab first — a script `focus()` alone leaves the browser's own
+  // focus-visible heuristic cold, so the ring a keyboard reader sees would not
+  // be painted and the screenshot would prove nothing.
+  await page.keyboard.press('Tab')
+  await unreadEntryRow.focus()
+  await unreadEntryRow.scrollIntoViewIfNeeded()
+  await settleAnimations(page)
+  const ring = await focusRing(page, taskEntrySelector(1))
+  expect(ring?.focusVisible).toBe(true)
+  expect(ring?.outlineStyle).toBe('solid')
+  expect(ring?.outlineWidth).toBe('2px')
+  await page.screenshot({ path: join(UI05_SHOTS, 'thread-entry-unread-focus.png'), fullPage: true })
+  await page.keyboard.press('Enter')
   await page.getByRole('heading', { name: /Task #1/ }).waitFor()
   await page.getByText('离线期间的批量更新 三', { exact: true }).waitFor()
   // The boundary stays as an informational separator even though reading is
@@ -944,7 +1142,11 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
 
   await page.getByRole('button', { name: '返回频道' }).click()
   await page.getByRole('button', { name: '# delivery' }).click()
-  await page.getByRole('button', { name: /Task #1/ }).click()
+  // The durable read cleared this reader's unread, so the entry row comes back
+  // to its bare label and drops the capsule.
+  await expect.poll(async () => await taskEntryRow(page, 1).getAttribute('aria-label'), { timeout: 10_000 }).toBe('打开 Task #1')
+  await expect.poll(async () => await entryUnreadCapsule(page, unreadLineSelector), { timeout: 10_000 }).toBeNull()
+  await taskEntryRow(page, 1).click()
   const agentRead = await scaffold.ctx.agentTeam.readThreadForAgent(agent, {
     requestId: 'm2-06-agent-read' as never, workspaceId: workspace.id, taskRef: task.taskRef,
   })
@@ -1217,21 +1419,35 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   await expect.poll(() => narrowMembersKeyboard.evaluate(element => element === document.activeElement)).toBe(true)
   await page.setViewportSize({ width: 1440, height: 960 })
 
-  // ── Human 「提到我」 Inbox ────────────────────────────────────────────────
-  // mention Human → badge; open Inbox → row; open Thread → badge/row clear;
-  // pure Agent inter-chat never enters the queue. Deltas ride a fresh
-  // taskless Thread so the assertions stay independent of earlier segments.
+  // ── Human Inbox (收件箱) ─────────────────────────────────────────────────
+  // mention Human → badge; an Agent's ordinary reply on a followed Thread →
+  // badge too; open Inbox → row; open Thread → badge/row clear. Deltas ride a
+  // fresh taskless Thread so the assertions stay independent of earlier
+  // segments.
   const inboxWorkspace = scaffold.ctx.workspaceRegistry.list()[0]!
-  const inboxBadge = page.locator('button[class*="inboxCard"]')
-  const railInboxButton = page.locator('nav[class*="railWorkspace"] button[aria-label*="提到我"]')
-  const badgeText = async (): Promise<string | null> => {
-    const scope = await inboxBadge.count() > 0 ? inboxBadge : railInboxButton
-    const mark = scope.locator('span[aria-hidden="true"]')
-    return await mark.count() > 0 ? await mark.textContent() : null
+  const inboxCard = page.locator('button[class*="inboxCard"]')
+  const railInboxButton = page.locator('nav[class*="railWorkspace"] button[aria-label*="收件箱"]')
+  // The sidebar states unread as a mark rather than a number, so the entry's own
+  // accessible name is the only place the quantity is written down — which is how
+  // a screen reader reaches it, and why this reads the name instead of a visible
+  // digit. `null` is the zero case: no count in the name at all.
+  const sidebarUnread = async (): Promise<string | null> => {
+    const scope = await inboxCard.count() > 0 ? inboxCard : railInboxButton
+    const match = /(\d+)/.exec((await scope.getAttribute('aria-label')) ?? '')
+    return match === null ? null : match[1]
   }
-  await inboxBadge.waitFor()
-  const baseDirect = scaffold.ctx.agentTeam.inbox({ workspaceId: inboxWorkspace.id, directOnly: true }).totalUnreadCount
-  await expect.poll(async () => await badgeText(), { timeout: 10_000 }).toBe(baseDirect === 0 ? null : String(baseDirect))
+  /** The visible half of the same fact: the dot stands exactly while the name states a count. */
+  const sidebarDot = async (): Promise<number> => {
+    const scope = await inboxCard.count() > 0 ? inboxCard : railInboxButton
+    return await scope.locator('[data-team-inbox-dot]').count()
+  }
+  const expectSidebarUnread = async (expected: string | null): Promise<void> => {
+    await expect.poll(async () => await sidebarUnread(), { timeout: 10_000 }).toBe(expected)
+    await expect.poll(async () => await sidebarDot()).toBe(expected === null ? 0 : 1)
+  }
+  await inboxCard.waitFor()
+  const baseUnread = scaffold.ctx.agentTeam.inbox({ workspaceId: inboxWorkspace.id }).totalUnreadCount
+  await expectSidebarUnread(baseUnread === 0 ? null : String(baseUnread))
 
   await page.getByRole('button', { name: '# delivery' }).click()
   await page.getByRole('heading', { name: '# delivery' }).waitFor()
@@ -1261,17 +1477,18 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
     recipients: [scaffold.ctx.agentTeam.status().humanMemberId],
   })
   expect(inboxMention.kind).toBe('committed')
-  const mentionedDirect = scaffold.ctx.agentTeam.inbox({ workspaceId: inboxWorkspace.id, directOnly: true })
-  expect(mentionedDirect.totalUnreadCount).toBe(baseDirect + 1)
+  const mentionedInbox = scaffold.ctx.agentTeam.inbox({ workspaceId: inboxWorkspace.id })
+  expect(mentionedInbox.totalUnreadCount).toBe(baseUnread + 1)
   // The row preview is the Thread anchor's first line — the Human's own opener.
-  expect(mentionedDirect.items.find((item: { thread: { threadRef: string } }) => item.thread.threadRef === inboxThreadRef)).toMatchObject({
+  expect(mentionedInbox.items.find((item: { thread: { threadRef: string } }) => item.thread.threadRef === inboxThreadRef)).toMatchObject({
     channelName: 'delivery', previewText: '请 Human 决策的讨论',
   })
   const inboxRow = page.locator('[data-team-inbox] button').filter({ hasText: '请 Human 决策的讨论' })
-  await expect.poll(async () => await badgeText(), { timeout: 10_000 }).toBe(String(baseDirect + 1))
-  await page.screenshot({ path: join(UI07_SHOTS, 'inbox-badge-desktop.png'), fullPage: true })
+  await expectSidebarUnread(String(baseUnread + 1))
+  await page.screenshot({ path: join(UI07_SHOTS, 'inbox-dot-desktop.png'), fullPage: true })
 
-  // Pure Agent inter-chat (no mentions parameter) never moves the direct badge.
+  // An ordinary Agent reply needs no mention: the Human follows their own
+  // Thread, so it lands in the queue and moves the badge by its own fact.
   const inboxOrdinary = await scaffold.ctx.agentTeam.replyForAgent(inboxAgent, {
     requestId: 'm2-09-builder-ordinary' as never,
     workspaceId: inboxWorkspace.id,
@@ -1280,17 +1497,51 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
     baseRevision: inboxMention.thread.revision,
   })
   expect(inboxOrdinary.kind).toBe('committed')
-  expect(scaffold.ctx.agentTeam.inbox({ workspaceId: inboxWorkspace.id, directOnly: true }).totalUnreadCount).toBe(baseDirect + 1)
-  await expect.poll(async () => await badgeText()).toBe(String(baseDirect + 1))
+  expect(scaffold.ctx.agentTeam.inbox({ workspaceId: inboxWorkspace.id }).totalUnreadCount).toBe(baseUnread + 2)
+  await expectSidebarUnread(String(baseUnread + 2))
 
-  // Narrow rail: 提到我 → Channels → Agents, badge on the first icon, and the
-  // icon is a destination that opens the Inbox page and expands the sidebar.
+  // A second Thread the Human opens and follows whose only unread fact is an
+  // Agent reply that names nobody. The queue now mixes the two kinds of unread
+  // the surface has to keep apart: one row that named the reader, one that
+  // merely moved, both waiting.
+  await inboxComposer.fill('工程侧同步，无需决策')
+  await page.getByRole('button', { name: '发送' }).click()
+  await page.locator('[data-team-channel] article').filter({ hasText: '工程侧同步，无需决策' }).waitFor()
+  const plainView = scaffold.ctx.agentTeam.view({ workspaceId: inboxWorkspace.id, channelRef: deliveryChannel.channelRef, topLevelOnly: true, includeActivities: false, direction: 'before', limit: 50 })
+  const plainThreadRef = (plainView.items.find((item: { message: { body: string } }) => item.message.body === '工程侧同步，无需决策').thread as { threadRef: string }).threadRef
+  const plainRead = await scaffold.ctx.agentTeam.readThreadForAgent(inboxAgent, {
+    requestId: 'm2-09-plain-read' as never, workspaceId: inboxWorkspace.id, threadRef: plainThreadRef as never,
+  })
+  const plainReply = await scaffold.ctx.agentTeam.replyForAgent(inboxAgent, {
+    requestId: 'm2-09-plain-reply' as never,
+    workspaceId: inboxWorkspace.id,
+    threadRef: plainThreadRef as never,
+    body: '收到，先按计划推进',
+    baseRevision: plainRead.thread.revision,
+  })
+  expect(plainReply.kind).toBe('committed')
+  expect(scaffold.ctx.agentTeam.inbox({ workspaceId: inboxWorkspace.id }).totalUnreadCount).toBe(baseUnread + 3)
+  await expectSidebarUnread(String(baseUnread + 3))
+
+  // Narrow rail: 收件箱 → Channels → Agents, unread marked on the first icon, and
+  // the icon is a destination that opens the Inbox page and expands the sidebar.
   await page.setViewportSize({ width: 390, height: 844 })
   const inboxRail = page.locator('nav[class*="railWorkspace"]')
   await inboxRail.waitFor()
   const railLabels = await inboxRail.locator('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')))
-  expect(railLabels).toEqual([`提到我，${baseDirect + 1} 条未读提及`, '频道', 'Agents'])
-  await expect.poll(async () => await badgeText()).toBe(String(baseDirect + 1))
+  expect(railLabels).toEqual([`收件箱，${baseUnread + 3} 条未读`, '频道', 'Agents'])
+  await expectSidebarUnread(String(baseUnread + 3))
+  // The dot replaced the number on the surface, so the rail's hover hint is where
+  // a reader still meets the quantity without opening the page: the same name the
+  // control carries, shown on demand. Hovering also proves the hint is not the
+  // only place it lives — the assertion above reads it with nothing hovered.
+  await railInboxButton.hover()
+  const railHint = page.locator('[role="tooltip"]')
+  await expect.poll(async () => await railHint.count()).toBe(1)
+  expect(await railHint.textContent()).toBe(`收件箱，${baseUnread + 3} 条未读`)
+  // Back off the control so the settled screenshot shows the rail, not the bubble.
+  await page.mouse.move(300, 600)
+  await expect.poll(async () => await railHint.count()).toBe(0)
   // The rail settles after the collapse crossfade; screenshot the settled rail.
   await settleAnimations(page)
   await page.screenshot({ path: join(UI07_SHOTS, 'inbox-narrow-rail.png'), fullPage: true })
@@ -1299,37 +1550,246 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   await expect.poll(() => page.locator('button[class*="inboxCard"]').count()).toBe(1)
   await expect.poll(async () => await inboxRow.count()).toBe(1)
   await expect.poll(async () => await inboxRow.textContent()).toContain('#delivery')
-  // The queue carries the shared header band plus its own count line.
+  const plainRow = page.locator('[data-team-inbox] button').filter({ hasText: '工程侧同步，无需决策' })
+  await expect.poll(async () => await plainRow.count()).toBe(1)
+  // The queue carries the shared header band plus its own count line, and that
+  // line is now segments the reader scans rather than a clause: the Thread
+  // count, the Host's whole unread slice, and — only while the queue holds one
+  // — the mentions inside it.
   const inboxPage = page.locator('[data-team-inbox]')
-  await expect.poll(async () => await inboxPage.getByRole('heading', { name: '提到我' }).count()).toBe(1)
-  await expect.poll(async () => await inboxPage.getByText(/共 1 个 Thread · \d+ 条提及/).count()).toBe(1)
+  await expect.poll(async () => await inboxPage.getByRole('heading', { name: '收件箱' }).count()).toBe(1)
+  // The page holds two slices, so each one is counted on its own: the queue
+  // shows every Thread the Host admits with unread, and the 「最近活跃」 tail
+  // shows what the Client caps it at. One whole-page row count would have to
+  // move every time an unrelated Thread joins the tail — which is exactly what
+  // a slice the reader's own writing admits does. Each slice is found by its own
+  // heading text: `filter({ has <locator> })` matches nothing in this page —
+  // even `has: locator('h2')` resolves to zero sections — while the text form
+  // this file already uses does.
+  const queueSection = inboxPage.locator('section').filter({ hasText: '需要我' })
+  const recentSection = inboxPage.locator('section').filter({ hasText: '最近活跃' })
+  const queue = scaffold.ctx.agentTeam.inbox({ workspaceId: inboxWorkspace.id })
+  await expect.poll(async () => await queueSection.locator('button[class*="row"]').count()).toBe(queue.items.length)
+  await expect.poll(async () => await recentSection.locator('button[class*="row"]').count()).toBeLessThanOrEqual(5)
+  const queueUnread = queue.items.reduce((sum, item) => sum + item.unreadCount, 0)
+  const queueMentions = queue.items.reduce((sum, item) => sum + item.directCount, 0)
+  await expect.poll(async () => await inboxPage.getByText(`${queue.items.length} 个 Thread`, { exact: true }).count()).toBe(1)
+  await expect.poll(async () => await inboxPage.getByText(`${queueUnread} 条未读`, { exact: true }).count()).toBe(1)
+  await expect.poll(async () => await inboxPage.getByText(`${queueMentions} 条提及`, { exact: true }).count()).toBe(1)
   // The row time is the newest unread fact's instant (the Human follows their
   // own opener, so the ordinary inter-chat reply advances it past the mention).
   await expect.poll(async () => await inboxRow.locator('time').count()).toBe(1)
-  // A mention raised today is named by day, and the precise instant stays on
-  // the element behind that label.
+  // A mention raised today is a bare clock time — no day word to print down
+  // every row — and the precise instant stays on the element behind that label.
   const inboxRowTime = inboxRow.locator('time').first()
-  await expect.poll(async () => await inboxRowTime.textContent()).toMatch(/^今天 \d{2}:\d{2}$/)
+  await expect.poll(async () => await inboxRowTime.textContent()).toMatch(/^\d{2}:\d{2}$/)
   expect(await inboxRowTime.getAttribute('title')).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
+  // The count closes the row's identity line, and it is where the split between
+  // a named Thread and one that merely moved reaches assistive tech: the row's
+  // visible text stays the Thread itself, never a second count.
+  const namedCapsule = inboxRow.locator('[data-team-count-badge]')
+  const plainCapsule = plainRow.locator('[data-team-count-badge]')
+  await expect.poll(async () => await namedCapsule.getAttribute('aria-label')).toBe('2 条未读，其中 1 条提及')
+  await expect.poll(async () => await plainCapsule.getAttribute('aria-label')).toBe('1 条未读')
+  expect(await namedCapsule.getAttribute('title')).toBe('2 条未读，其中 1 条提及')
+  expect(await namedCapsule.textContent()).toBe('2')
+  expect(await plainCapsule.textContent()).toBe('1')
+  // A squeezed seat: the provenance shortens with an ellipsis instead of folding
+  // one row into three lines, the clock keeps the identity's own line, nothing
+  // spills out of a row, and the page still does not scroll sideways.
+  const narrowFit = await inboxPage.evaluate(root => {
+    const rows = [...root.querySelectorAll('button[class*="row"]')] as HTMLElement[]
+    const crumbs = rows.map(row => row.querySelector('[class*="rowCrumb"]') as HTMLElement)
+    const times = rows.map(row => row.querySelector('time') as HTMLElement)
+    const crumbStyle = getComputedStyle(crumbs[0]!)
+    return {
+      documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      rowSpill: Math.max(...rows.map(row => row.scrollWidth - row.clientWidth)),
+      crumbNowrap: crumbStyle.whiteSpace,
+      crumbEllipsis: crumbStyle.textOverflow,
+      clockOnIdentityLine: rows.every((_, index) => Math.abs(crumbs[index]!.getBoundingClientRect().top - times[index]!.getBoundingClientRect().top) < 4),
+      rowHeight: Math.round(rows[0]!.getBoundingClientRect().height),
+    }
+  })
+  expect(narrowFit.documentOverflow).toBeLessThanOrEqual(0)
+  expect(narrowFit.rowSpill).toBeLessThanOrEqual(0)
+  expect(narrowFit.crumbNowrap).toBe('nowrap')
+  expect(narrowFit.crumbEllipsis).toBe('ellipsis')
+  expect(narrowFit.clockOnIdentityLine).toBe(true)
+  // A wrapped provenance costs this seat three lines' worth of row; two lines
+  // with a clipped one is the shape the row keeps now.
+  expect(narrowFit.rowHeight).toBeLessThanOrEqual(60)
   await settleAnimations(page)
   await page.screenshot({ path: join(UI07_SHOTS, 'inbox-page-narrow.png'), fullPage: true })
+  // The expanded seat above is the side effect of the rail icon being a
+  // destination; on a phone the ordinary reading state is the collapsed rail,
+  // so the queue gets that face too — and there the row keeps its compact shape
+  // rather than the folded one the crushed seat forces.
+  await page.getByRole('button', { name: '收起侧边栏' }).click()
+  await page.locator('[data-sidebar-collapsed="true"]').waitFor()
+  await settleLayout(page)
+  const collapsedRow = await inboxPage.locator('button[class*="row"]').first().evaluate(row => {
+    const box = (selector: string): DOMRect => (row.querySelector(selector) as HTMLElement).getBoundingClientRect()
+    const line = box('[class*="rowCrumb"]')
+    return { height: Math.round(row.getBoundingClientRect().height), sameLine: Math.abs(line.top - box('time').top) < 4 }
+  })
+  expect(collapsedRow.height).toBeLessThanOrEqual(62)
+  expect(collapsedRow.sameLine).toBe(true)
+  await page.screenshot({ path: join(UI07_SHOTS, 'inbox-page-narrow-collapsed.png'), fullPage: true })
+  await railInboxButton.click()
+  await page.locator('[data-sidebar-collapsed]').waitFor({ state: 'detached' })
+  await settleLayout(page)
   await page.setViewportSize({ width: 1440, height: 960 })
+  // The queue's settled desktop face, before a row is opened: the two rows the
+  // queue now mixes, in the two inks, at the width most reading happens at.
+  await settleLayout(page)
+  const ink = async (locator: Locator) => await locator.evaluate(element => {
+    const style = getComputedStyle(element)
+    const box = element.getBoundingClientRect()
+    return {
+      background: style.backgroundColor, border: style.borderTopColor, color: style.color,
+      width: Math.round(box.width), height: Math.round(box.height), left: Math.round(box.x),
+    }
+  })
+  const namedInk = await ink(namedCapsule)
+  const plainInk = await ink(plainCapsule)
+  // One grammar, two inks: the row that named the reader wears the solid fill,
+  // and the row that merely moved wears the same capsule as a hairline.
+  expect(plainInk.background).not.toBe(namedInk.background)
+  expect(plainInk.border).not.toBe('rgba(0, 0, 0, 0)')
+  // The sidebar states that same fact as a mark instead of a number: the count
+  // left the surface for the entry's accessible name, and what is left on screen
+  // is the ink the row that named the reader wears. It is a mark rather than a
+  // shrunken capsule, so it is measured as one — a count that comes back here
+  // would fail the first assertion.
+  expect(await page.locator('button[class*="inboxCard"] [data-team-count-badge]').count()).toBe(0)
+  const inboxDot = page.locator('button[class*="inboxCard"] [data-team-inbox-dot]')
+  await expect.poll(async () => await inboxDot.count()).toBe(1)
+  const dotInk = await ink(inboxDot)
+  expect(dotInk.background).toBe(namedInk.background)
+  expect(dotInk.width).toBe(8)
+  expect(dotInk.height).toBe(8)
+  // Identical geometry either way: a Thread does not shift its row when it is
+  // named again, and the counts open one column down the page.
+  expect(namedInk.height).toBe(plainInk.height)
+  expect(namedInk.width).toBe(plainInk.width)
+  expect(namedInk.left).toBe(plainInk.left)
+  // One capsule, two surfaces: the Channel feed's Thread entry and both Inbox
+  // queue rows are the same component, so the shape that decides where the digit
+  // sits cannot drift between them — which is exactly how the feed's copy ended
+  // up on a different line box from the other two. The sidebar left this set: it
+  // draws the mark asserted above rather than a count.
+  const queueShape = (await namedCapsule.evaluate(readCountCapsule)).shape
+  expect((await plainCapsule.evaluate(readCountCapsule)).shape).toEqual(queueShape)
+  expect(unreadCapsule?.shape).toEqual(queueShape)
+  const edgeLeft = async (locator: Locator): Promise<number> => Math.round(await locator.evaluate(element => element.getBoundingClientRect().x))
+  const edgeRight = async (locator: Locator): Promise<number> => Math.round(await locator.evaluate(element => element.getBoundingClientRect().right))
+  // One content column, measured rather than assumed: a Member circle hangs in
+  // the row's gutter on every row — counted or not — and everything the row says
+  // opens on the column after it, in both sections; the section heading opens on
+  // that same column. The whole promise of this layout is that heading, identity,
+  // and gist read down one inset instead of three, so a row that drifts sideways
+  // fails here. The count then closes the identity line one line-gap left of the
+  // instant, which is where a reader scans for what is still waiting.
+  const column = await inboxPage.evaluate(root => [...root.querySelectorAll('section')].map(section => {
+    const heading = section.querySelector('h2') as HTMLElement
+    const range = document.createRange()
+    range.selectNodeContents(heading)
+    const box = (selector: string, row: Element): DOMRect => (row.querySelector(selector) as HTMLElement).getBoundingClientRect()
+    const left = (selector: string, row: Element): number => Math.round(box(selector, row).left)
+    return {
+      heading: Math.round(range.getBoundingClientRect().left),
+      rows: [...section.querySelectorAll('button')].map(row => {
+        const badge = row.querySelector('[data-team-count-badge]') as HTMLElement | null
+        const actor = row.querySelector('[class*="rowActor"]') as HTMLElement
+        return {
+          actor: left('[class*="rowActor"]', row),
+          actorWidth: Math.round((actor.querySelector('[role="img"]') as HTMLElement).getBoundingClientRect().width),
+          badgeToTime: badge === null ? null : Math.round(box('time', row).left - badge.getBoundingClientRect().right),
+          crumb: left('[class*="rowCrumb"]', row),
+          preview: left('[class*="rowPreview"]', row),
+          // One Workspace on screen, so no row prints the name that never varies.
+          workspace: row.querySelector('[class*="rowWorkspace"]') === null ? null : 1,
+        }
+      }),
+    }
+  }))
+  expect(column.length).toBeGreaterThan(0)
+  for (const section of column) {
+    for (const row of section.rows) {
+      expect(row.preview).toBe(row.crumb)
+      expect(section.heading).toBe(row.crumb)
+      expect(row.actor).toBe(row.crumb - 26)
+      expect(row.actorWidth).toBe(18)
+      if (row.badgeToTime !== null) expect(row.badgeToTime).toBe(8)
+      expect(row.workspace).toBeNull()
+    }
+  }
+  // The two times close one column on the right.
+  expect(await edgeRight(inboxRow.locator('time'))).toBe(await edgeRight(plainRow.locator('time')))
+  await page.screenshot({ path: join(UI07_SHOTS, 'inbox-page-desktop.png'), fullPage: true })
+  // Keyboard: a row is one control, and the ring is the only chrome it grows —
+  // around both of its lines, not around the count. Tab first, because a script
+  // `focus()` alone leaves the browser's focus-visible heuristic cold.
+  await page.keyboard.press('Tab')
+  await inboxRow.focus()
+  await inboxRow.scrollIntoViewIfNeeded()
+  const rowRing = await focusRing(page, '[data-team-inbox] button[data-named]')
+  expect(rowRing?.focusVisible).toBe(true)
+  expect(rowRing?.outlineStyle).toBe('solid')
+  expect(rowRing?.outlineWidth).toBe('2px')
+  await settleAnimations(page)
+  await page.screenshot({ path: join(UI07_SHOTS, 'inbox-row-focus.png'), fullPage: true })
 
-  // Opening the row's Thread acknowledges the mention durably: the badge and
-  // the row drop through the existing auto-ack read, and Back lands on the
-  // row's Channel — the Inbox is never on the back path.
+  // Opening the row's Thread acknowledges the mention durably: the badge and the
+  // row drop through the existing auto-ack read, and Back lands on the row's
+  // Channel — the Inbox is never on the back path. The row that merely moved is
+  // still waiting, so the badge lands on its count rather than zero — and the
+  // row just read is not gone from the page either: it comes back under
+  // 「最近活跃」 without a count, while the queue keeps the one still waiting.
   await inboxRow.click()
   await page.locator('[data-team-thread]').waitFor()
-  await expect.poll(async () => await badgeText(), { timeout: 10_000 }).toBe(baseDirect === 0 ? null : String(baseDirect))
+  await expectSidebarUnread(baseUnread === 0 ? '1' : String(baseUnread + 1))
   await page.getByRole('button', { name: '返回频道' }).click()
   await page.getByRole('heading', { name: '# delivery' }).waitFor()
   await page.locator('button[class*="inboxCard"]').click()
   await page.locator('[data-team-inbox]').waitFor()
-  // The empty face is the settled list, not the entry frame: the rows are
-  // absent while the page loads too, so wait for the empty copy itself.
-  await page.locator('[data-team-inbox]').getByText('还没有人提到你').waitFor()
-  await expect.poll(async () => await inboxRow.count()).toBe(0)
-  await page.screenshot({ path: join(UI07_SHOTS, 'inbox-page-empty.png'), fullPage: true })
+  // Wait on the section rather than on a row count: a row count of zero is also
+  // what the entry frame shows, so only the section proves the fetch settled.
+  await page.locator('[data-team-inbox]').getByRole('heading', { name: '最近活跃' }).waitFor({ timeout: 30_000 })
+  await expect.poll(async () => await inboxRow.count()).toBe(1)
+  await expect.poll(async () => await inboxRow.locator('[data-team-count-badge]').count()).toBe(0)
+  await expect.poll(async () => await plainRow.count()).toBe(1)
+  await expect.poll(async () => await plainRow.textContent()).toContain('工程侧同步，无需决策')
+  await expect.poll(async () => await plainRow.locator('[data-team-count-badge]').count()).toBe(1)
+  // A read row keeps the leading column instead of sliding left: the same Thread
+  // moves between the two sections, so it reads down one column either way, and
+  // a read row is the queue row minus its count rather than a differently shaped
+  // object — both still open on the person who moved them.
+  expect(await edgeLeft(inboxRow.locator('[class*="rowActor"]'))).toBe(await edgeLeft(plainRow.locator('[class*="rowActor"]')))
+  expect(await edgeLeft(inboxRow.locator('[class*="rowCrumb"]'))).toBe(await edgeLeft(plainRow.locator('[class*="rowCrumb"]')))
+  // Reading the second row drains the queue the same way, and a drained queue is
+  // no longer the empty page: both Threads the reader took part in come back as
+  // the 「最近活跃」 tail, so the settled face is that section. The queue's own
+  // heading and count line go with its rows, and the tail's rows carry no count
+  // capsule — zero is the absence of a badge rather than a badge reading zero.
+  // The empty copy is left to the reader who has neither, which the component
+  // spec covers, since this journey's reader always took part somewhere. Wait
+  // for the section rather than for rows: rows are absent while the page loads.
+  await plainRow.click()
+  await page.locator('[data-team-thread]').waitFor()
+  await expectSidebarUnread(baseUnread === 0 ? null : String(baseUnread))
+  await page.getByRole('button', { name: '返回频道' }).click()
+  await page.getByRole('heading', { name: '# delivery' }).waitFor()
+  await page.locator('button[class*="inboxCard"]').click()
+  await page.locator('[data-team-inbox]').waitFor()
+  await page.locator('[data-team-inbox]').getByRole('heading', { name: '最近活跃' }).waitFor({ timeout: 30_000 })
+  await expect.poll(async () => await page.locator('[data-team-inbox]').getByRole('heading', { name: '需要我' }).count()).toBe(0)
+  await expect.poll(async () => await inboxRow.count()).toBe(1)
+  await expect.poll(async () => await plainRow.count()).toBe(1)
+  await expect.poll(async () => await inboxRow.locator('[data-team-count-badge]').count()).toBe(0)
+  await expect.poll(async () => await plainRow.locator('[data-team-count-badge]').count()).toBe(0)
+  await page.screenshot({ path: join(UI07_SHOTS, 'inbox-page-recent.png'), fullPage: true })
   await expect.poll(async () => await page.locator('button[class*="inboxCard"]').getAttribute('aria-current')).toBe('page')
 
   // Losing the Host connection surfaces the failure in two places, and both
@@ -1405,7 +1865,64 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   await settleAnimations(page)
   await page.screenshot({ path: join(UI08_SHOTS, 'sidebar-recovered-online.png'), fullPage: true })
 
-  // Keyboard path: the card is focusable and opens the page from the keyboard.
+  // One member posting several Messages in a row: each is its own Thread entry
+  // and its own Task, so the feed has to keep three entries readable without
+  // repeating the identity line the run already carries.
+  await page.getByRole('button', { name: '# delivery' }).click()
+  await page.getByRole('heading', { name: '# delivery' }).waitFor()
+  for (const body of ['连续消息之一', '连续消息之二', '连续消息之三']) {
+    await asTaskToggle.focus()
+    await page.keyboard.press('Space')
+    await expect.poll(() => asTaskToggle.getAttribute('aria-pressed')).toBe('true')
+    await channelComposer.fill(body)
+    await page.getByRole('button', { name: '发送' }).click()
+    await page.locator('[data-team-channel] article').filter({ hasText: body }).waitFor()
+    await expect.poll(() => asTaskToggle.getAttribute('aria-pressed')).toBe('false')
+  }
+  await settleAnimations(page)
+  await page.screenshot({ path: join(UI05_SHOTS, 'consecutive-entries.png'), fullPage: true })
+  // The operator's case, as an assertion: several Messages from one member in a
+  // row. Each is its own Thread entry and its own Task, and a continuation row's
+  // identity line carries nothing but its own time — so the state has to ride
+  // each entry's own row, opening it, instead of parking at a line's far end.
+  const consecutive = await page.evaluate(() => [...document.querySelectorAll('[data-team-channel] article')]
+    .filter(article => /连续消息之[一二三]/.test(article.textContent ?? ''))
+    .map(article => {
+      const body = article.lastElementChild
+      const entry = [...(body?.children ?? [])].find(child => child.hasAttribute('data-thread-entry'))
+      // The identity line is whatever the body box opens with, unless the entry
+      // line itself does — a grouped row renders no identity line at all.
+      const opening = body?.firstElementChild
+      const nameRow = opening !== null && opening !== undefined && !opening.hasAttribute('data-thread-entry') ? opening : null
+      const left = (element: Element | null | undefined): number => element === null || element === undefined ? -1 : Math.round(element.getBoundingClientRect().left)
+      return {
+        grouped: article.getAttribute('data-grouped') === 'true',
+        identityLine: nameRow?.textContent ?? '',
+        entryText: entry?.textContent ?? '',
+        series: /连续消息之([一二三])/.exec(article.textContent ?? '')?.[1] ?? '',
+        stateLeft: left(entry?.firstElementChild),
+        entryLeft: left(entry),
+        columnLeft: left(body),
+      }
+    }))
+  // Chinese numerals do not collate into counting order, so the send order is
+  // the only correct key here.
+  const seriesOrder = ['一', '二', '三']
+  consecutive.sort((first, second) => seriesOrder.indexOf(first.series) - seriesOrder.indexOf(second.series))
+  expect(consecutive.map(row => row.series)).toEqual(seriesOrder)
+  expect(consecutive.some(row => row.grouped)).toBe(true)
+  for (const row of consecutive) {
+    // The identity line stays identity — the status word is not on it, so no
+    // continuation row shows a lone status floating where a sender would be.
+    expect(row.identityLine).not.toContain('待处理')
+    // …and it did land on the entry line, opening it level with the body.
+    expect(row.entryText).toContain('待处理')
+    expect(row.stateLeft).toBe(row.entryLeft)
+    expect(row.stateLeft).toBe(row.columnLeft)
+  }
+  // One state column for the whole feed, not one per message length.
+  expect(new Set(consecutive.map(row => row.stateLeft)).size).toBe(1)
+
   await page.getByRole('button', { name: '# delivery' }).click()
   await page.getByRole('heading', { name: '# delivery' }).waitFor()
   await page.locator('button[class*="inboxCard"]').focus()

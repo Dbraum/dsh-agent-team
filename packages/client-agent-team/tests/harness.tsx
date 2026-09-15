@@ -109,6 +109,9 @@ export async function runtimeWithTeam(options?: { mode?: 'team'; workspaceId?: s
     thread: { threadRef: seedThreadRef, taskRef: seedTaskRef, revision: 2 },
     taskNumber: 1,
     messageCount: 1,
+    // A seed is the only fact on its Thread, so the newest fact instant is the
+    // Message's own: the feed reads that equality as "no follow-up yet".
+    lastActivityAt: seed.occurredAt,
   }))
   let viewClaims: Array<Record<string, unknown>> = []
   let viewActivities: Array<Record<string, unknown>> = []
@@ -206,7 +209,7 @@ export async function runtimeWithTeam(options?: { mode?: 'team'; workspaceId?: s
     const thread = { threadRef: 'thread:1', ...(asTask ? { taskRef: 'task:1' } : {}), revision: sequence }
     const attachments = request.attachments === undefined ? [] : request.attachments.map(id => ({ attachmentId: id, name: `file-${id}.png`, byteSize: 8, mediaType: 'image/png' }))
     const message = { messageRef: `message:${sequence}`, channelRef: request.channelRef, threadRef: 'thread:1', ...(asTask ? { taskRef: 'task:1' } : {}), sender: 'member:human', body: request.body, ...(attachments.length === 0 ? {} : { attachments }), topLevel: true, sequence, occurredAt: '2026-08-21T10:00:00.000Z' }
-    viewItems = [{ message, mentions: [], ...(task === undefined ? {} : { task, taskNumber: 1 }), thread, messageCount: 1 }]
+    viewItems = [{ message, mentions: [], ...(task === undefined ? {} : { task, taskNumber: 1 }), thread, messageCount: 1, lastActivityAt: message.occurredAt }]
     return { ok: true as const, value: { kind: 'committed' as const, receipt: {}, message, ...(task === undefined ? {} : { task }), thread, attention: [], directMarkers: [] } }
   })
   // The double parks a subscriber's silent first probe while caught up
@@ -319,18 +322,22 @@ export async function runtimeWithTeam(options?: { mode?: 'team'; workspaceId?: s
     })
     return { ok: true as const, value: { resolved } }
   })
-  // The Human direct-only Inbox double: rows are tagged per Workspace and
-  // totals collapse to the direct sum, matching the Host's direct-only slice.
-  // The badge and the Inbox page both read through this one remote, and only
-  // the direct-only slice returns rows — a Client request without the flag
-  // would bypass the mention queue silently, so these tests redden on it.
+  // The Human Inbox double: rows are tagged per Workspace, and one call shape
+  // serves every surface that reads the Inbox — the sidebar badge, the Inbox
+  // page, and the Channel feed's Thread entries. It returns the Host's two
+  // slices: `items` is the unread queue (mentions inside it, not alone, so
+  // `totalUnreadCount` is the badge number while `directCount` stays the row's
+  // own mention count), and a row seeded with no unread stands for the
+  // 「最近活跃」 tail the Host admits by participation instead.
   let inboxRows: Array<{ readonly workspaceId: string; readonly item: Record<string, unknown> }> = []
-  const inbox = vi.fn(async ({ workspaceId, directOnly }: { workspaceId: string; directOnly?: boolean }) => {
-    const items = directOnly === true
-      ? inboxRows.filter(row => row.workspaceId === workspaceId).map(row => row.item)
-      : []
+  const inbox = vi.fn(async ({ workspaceId }: { workspaceId: string }) => {
+    const scoped = inboxRows.filter(row => row.workspaceId === workspaceId)
+    const holdsUnread = (row: { readonly item: Record<string, unknown> }): boolean => ((row.item as { unreadCount?: number }).unreadCount ?? 0) > 0
+    const items = scoped.filter(holdsUnread).map(row => row.item)
+    const recent = scoped.filter(row => !holdsUnread(row)).map(row => row.item)
+    const unread = items.reduce((sum, item) => sum + ((item as { unreadCount?: number }).unreadCount ?? 0), 0)
     const direct = items.reduce((sum, item) => sum + ((item as { directCount?: number }).directCount ?? 0), 0)
-    return { ok: true as const, value: { items, totalUnreadCount: direct, totalDirectCount: direct } }
+    return { ok: true as const, value: { items, recent, totalUnreadCount: unread, totalDirectCount: direct } }
   })
   const seedInbox = (rows: ReadonlyArray<{ readonly workspaceId: string } & Record<string, unknown>>): void => {
     inboxRows = rows.map(row => ({ workspaceId: row.workspaceId, item: row as Record<string, unknown> }))
@@ -356,7 +363,11 @@ export async function runtimeWithTeam(options?: { mode?: 'team'; workspaceId?: s
   const recoverChanges = (): void => { changeFailure = undefined; wakeAll() }
   const publishAgentReply = () => {
     const top = viewItems[0]!
-    viewItems = [{ ...top, messageCount: 2 }, { ...top, message: { ...(top.message as object), messageRef: 'message:reply', sender: 'member:builder', body: 'agent reply', topLevel: false, sequence: 3 }, messageCount: 2 }]
+    // The reply and the Claim it carries are newer facts than the opener, so
+    // the Thread's newest instant moves: that difference is what the feed's
+    // "last activity" reads.
+    const activityAt = '2026-08-21T10:03:00.000Z'
+    viewItems = [{ ...top, messageCount: 2, lastActivityAt: activityAt }, { ...top, messageCount: 2, lastActivityAt: activityAt, message: { ...(top.message as object), messageRef: 'message:reply', sender: 'member:builder', body: 'agent reply', topLevel: false, sequence: 3, occurredAt: activityAt } }]
     viewClaims = [{ claimRef: 'claim:1', taskRef: 'task:1', threadRef: 'thread:1', owner: 'member:builder', direction: 'Implement API', normalizedDirection: 'implement api', state: 'active' }]
     viewActivities = [{ activityRef: 'activity:claim', taskRef: 'task:1', threadRef: 'thread:1', actor: 'member:builder', kind: 'claim', claimRef: 'claim:1', sequence: 4 }]
     wakeAll()
