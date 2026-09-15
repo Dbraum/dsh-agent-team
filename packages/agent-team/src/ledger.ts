@@ -119,9 +119,18 @@ import type {
   AgentTeamViewRequest,
 } from './types.ts'
 import { formatTeamTimestamp } from './time-format.ts'
+import { resolveBodyMentions } from './mentions.ts'
+import type { AgentTeamBodyMentionCandidate } from './mentions.ts'
 
 /** Stable Human Member identity shared by every replay of one dshHome Team. */
 export const AGENT_TEAM_HUMAN_MEMBER_ID = 'member:human' as AgentTeamMemberId
+
+/**
+ * The handle the Human is addressed by in Message bodies. The body parser and
+ * the Member directory both read this one constant, so a configurable display
+ * name has a single place to land instead of a hard-coded literal per surface.
+ */
+export const AGENT_TEAM_HUMAN_HANDLE = 'human'
 
 /** Idempotency identity of the one Host bootstrap operation. */
 export const AGENT_TEAM_INITIALIZE_REQUEST_ID = 'agent-team:initialize:v1' as AgentTeamRequestId
@@ -129,7 +138,7 @@ export const AGENT_TEAM_INITIALIZE_REQUEST_ID = 'agent-team:initialize:v1' as Ag
 const HUMAN_ACTOR: AgentTeamHumanActor = Object.freeze({
   kind: 'human',
   memberId: AGENT_TEAM_HUMAN_MEMBER_ID,
-  handle: 'human',
+  handle: AGENT_TEAM_HUMAN_HANDLE,
 })
 
 /** Resolve the one Human authority owned by this Team. */
@@ -905,17 +914,20 @@ export class AgentTeamLedger {
 
   sendMessage(request: AgentTeamAuthorizedSendMessageRequest): Promise<AgentTeamLedgerResult<AgentTeamSendMessageResult>> {
     return this.enqueue(async () => {
-      const recipients = this.normalizeRecipients(request.actor, request.recipients)
-      const existing = this.state.byRequest.get(request.requestId)
-      if (existing !== undefined) {
-        this.assertSameMessage(existing, request, recipients)
-        return this.resolved(this.messageResult(existing))
-      }
       const actor = this.assertActorForWorkspace(request.actor, request.workspaceId)
       const channel = this.requireActiveChannel(request.workspaceId, request.channelRef)
       if (actor.kind === 'member') this.requireMemberChannel(this.requireMember(actor.memberId), channel.channelRef)
       const body = request.body.trim()
       if (body === '') throw new Error('message body must not be empty')
+      // Recipients are resolved before the request-id lookup: the stored
+      // operation carries the merged set, so a retry has to re-derive the same
+      // list for the collision check to prove it is the same request.
+      const recipients = this.mergeBodyMentions(actor.memberId, channel.channelRef, body, this.normalizeRecipients(request.actor, request.recipients))
+      const existing = this.state.byRequest.get(request.requestId)
+      if (existing !== undefined) {
+        this.assertSameMessage(existing, request, recipients)
+        return this.resolved(this.messageResult(existing))
+      }
       this.assertMentionTargets(channel, recipients)
       // Top-level Task creation is open to every actor: mentioned Members join
       // the new Thread as followers. Only existing-Thread invitations stay
@@ -951,30 +963,36 @@ export class AgentTeamLedger {
 
   reply(request: AgentTeamAuthorizedReplyRequest): Promise<AgentTeamLedgerResult<AgentTeamReplyResult>> {
     return this.enqueue(async () => {
-      const recipients = this.normalizeRecipients(request.actor, request.recipients)
-      const existing = this.state.byRequest.get(request.requestId)
-      if (existing !== undefined) {
-        this.assertSameReply(existing, request, recipients)
-        return this.resolved(this.replyResult(existing))
-      }
       const actor = this.assertActorForWorkspace(request.actor, request.workspaceId)
       const { task, thread, channelRef } = this.threadContextForActor(actor, request.workspaceId, request)
       const body = request.body.trim()
       if (body === '') throw new Error('message body must not be empty')
-      this.assertMentionTargets(this.requireChannel(request.workspaceId, channelRef), recipients)
+      const channel = this.requireChannel(request.workspaceId, channelRef)
+      const recipients = this.mergeBodyMentions(actor.memberId, channelRef, body, this.normalizeRecipients(actor, request.recipients))
+      const existing = this.state.byRequest.get(request.requestId)
+      if (existing !== undefined) {
+        this.assertSameReply(existing, request, recipients)
+        return this.resolved(this.replyResult(existing, this.undeliverableRecipients(actor, thread.threadRef, recipients)))
+      }
+      this.assertMentionTargets(channel, recipients)
       const deferred = this.deferredThreadWrite(actor.memberId, task, thread, request.baseRevision)
       if (deferred !== undefined) return this.resolved(deferred)
       if (task?.resolution === 'closed') throw new Error(`Task '${task.taskRef}' is closed; reopen it before replying`)
-      const unfollowedAgents = recipients.filter(memberId => this.state.members.has(memberId) && !this.isFollowing(thread.threadRef, memberId))
-      if (unfollowedAgents.length > 0 && actor.kind === 'member') {
-        return this.resolved(this.memberNotFollowing(request.workspaceId, channelRef, unfollowedAgents, task, thread))
-      }
-      if (unfollowedAgents.length > 0 && request.confirmationToken === undefined) {
-        return this.resolved(this.issueConfirmation(request.actor, request.workspaceId, channelRef, body, recipients, task, thread))
+      // An Agent cannot invite into an existing Thread, so a body mention the
+      // Thread has never carried is dropped and reported back rather than
+      // failing the send. The Human keeps the confirmation step, which is what
+      // actually grants the invitation.
+      const undelivered = this.undeliverableRecipients(actor, thread.threadRef, recipients)
+      const delivered = undelivered.length === 0 ? recipients : recipients.filter(memberId => !undelivered.includes(memberId))
+      const unfollowedAgents = delivered.filter(memberId => this.state.members.has(memberId) && !this.isFollowing(thread.threadRef, memberId))
+      // A Member that once took part in this Thread is delivered to directly:
+      // re-joining a Thread it already belongs to is not an invitation.
+      if (unfollowedAgents.length > 0 && actor.kind === 'human' && request.confirmationToken === undefined) {
+        return this.resolved(this.issueConfirmation(request.actor, request.workspaceId, channelRef, body, delivered, task, thread))
       }
       if (request.confirmationToken !== undefined) {
         this.consumeConfirmation(request.confirmationToken, request.actor, request.workspaceId, channelRef,
-          task, thread, body, recipients)
+          task, thread, body, delivered)
       }
       const sequence = this.nextSequence()
       const base = this.operationBase(request, sequence)
@@ -986,15 +1004,15 @@ export class AgentTeamLedger {
       })
       const nextThread: AgentTeamThread = Object.freeze({ ...thread, revision: sequence })
       const started = unfollowedAgents.map(memberId => this.startAttention(memberId, thread.threadRef, sequence))
-      const inbox = this.messageInboxDelta(message, request.actor.memberId, recipients, started)
+      const inbox = this.messageInboxDelta(message, request.actor.memberId, delivered, started)
       const operation: AgentTeamThreadRepliedOperation = Object.freeze({
         ...base, kind: 'team/thread-replied',
         data: Object.freeze({ workspaceId: request.workspaceId, baseRevision: request.baseRevision,
-          mentions: recipients, message, ...(task === undefined ? {} : { task }), thread: nextThread, inbox }),
+          mentions: delivered, message, ...(task === undefined ? {} : { task }), thread: nextThread, inbox }),
       })
       await this.table.put(operation.operationId, operation)
       this.apply(operation)
-      return this.committed(this.replyResult(operation))
+      return this.committed(this.replyResult(operation, undelivered))
     })
   }
 
@@ -2404,7 +2422,7 @@ export class AgentTeamLedger {
     // Top-level mentions are open to every actor; only a Member reply may not
     // pull an unfollowed Member into an existing Thread.
     if (operation.actor.kind === 'member' && operation.kind === 'team/thread-replied'
-      && mentionedAgents.some(memberId => !this.isFollowingFrom(projection, message.threadRef, memberId))) {
+      && mentionedAgents.some(memberId => !this.everParticipatedFrom(projection, message.threadRef, memberId))) {
       throw new Error('invalid Agent mention projection')
     }
     const started = operation.kind === 'team/message-sent'
@@ -3145,17 +3163,6 @@ export class AgentTeamLedger {
     }
   }
 
-  private memberNotFollowing(
-    workspaceId: WorkspaceId,
-    channelRef: AgentTeamChannelRef,
-    memberIds: readonly AgentTeamMemberId[],
-    task?: AgentTeamTask,
-    thread?: AgentTeamThread,
-  ) {
-    return Object.freeze({ kind: 'member_not_following' as const, workspaceId, channelRef, memberIds: Object.freeze(memberIds),
-      ...(task === undefined ? {} : { taskRef: task.taskRef }), ...(thread === undefined ? {} : { threadRef: thread.threadRef, revision: thread.revision }) })
-  }
-
   private unreadRequired(task: AgentTeamTask | undefined, thread: AgentTeamThread, unread: readonly AgentTeamThreadReadFact[]): AgentTeamUnreadRequired {
     return Object.freeze({ kind: 'unread_required', ...(task === undefined ? {} : { taskRef: task.taskRef }), threadRef: thread.threadRef,
       revision: thread.revision, unreadCount: unread.length, directCount: unread.filter(item => item.direct).length })
@@ -3226,10 +3233,11 @@ export class AgentTeamLedger {
   }
 
   /** Commit projections shared by the Message-sent and Thread-replied results. */
-  private committedMessageResult(operation: AgentTeamMessageSentOperation | AgentTeamThreadRepliedOperation) {
+  private committedMessageResult(operation: AgentTeamMessageSentOperation | AgentTeamThreadRepliedOperation, undelivered: readonly AgentTeamMemberId[] = []) {
     return { kind: 'committed' as const, receipt: this.receipt(operation), message: operation.data.message,
       ...(operation.data.task === undefined ? {} : { task: operation.data.task }), thread: operation.data.thread, attention: operation.data.inbox.attention.set,
-      directMarkers: operation.data.inbox.directMarkers.added }
+      directMarkers: operation.data.inbox.directMarkers.added,
+      ...(undelivered.length === 0 ? {} : { undeliveredMentions: undelivered }) }
   }
 
   private threadAnchor(threadRef: AgentTeamThreadRef): AgentTeamMessage {
@@ -3511,6 +3519,78 @@ export class AgentTeamLedger {
     const unique = new Set(values ?? [])
     if (unique.size !== (values?.length ?? 0)) throw new Error(`${label} contains duplicate Member refs`)
     return Object.freeze([...unique].sort())
+  }
+
+  /**
+   * Names a Message body may address in one Channel: every live Member of that
+   * Channel plus the Human. A name outside this set stays prose, which is what
+   * keeps an incidental name-drop from reaching someone the Channel cannot
+   * deliver to.
+   */
+  private mentionCandidatesFor(channelRef: AgentTeamChannelRef): readonly AgentTeamBodyMentionCandidate[] {
+    const candidates: AgentTeamBodyMentionCandidate[] = [{ memberId: AGENT_TEAM_HUMAN_MEMBER_ID, handle: AGENT_TEAM_HUMAN_HANDLE }]
+    for (const member of this.state.members.values()) {
+      if (member.state === 'inactive' || member.state === 'archived') continue
+      if (!this.isChannelMember(channelRef, member.memberId)) continue
+      candidates.push({ memberId: member.memberId, handle: member.handle })
+    }
+    return Object.freeze(candidates)
+  }
+
+  /**
+   * Merge the `@Handle` mentions authored in `body` into an explicit recipient
+   * set. Body mentions are the primary channel now: an Agent has no recipient
+   * parameter to forget, and the same scan serves Human input typed by hand.
+   * The result stays a plain recipient set, so every downstream projection —
+   * delivery markers, chip rendering, confirmation — is unchanged.
+   */
+  private mergeBodyMentions(
+    sender: AgentTeamMemberId,
+    channelRef: AgentTeamChannelRef,
+    body: string,
+    explicit: readonly AgentTeamMemberId[],
+  ): readonly AgentTeamMemberId[] {
+    const candidates = this.mentionCandidatesFor(channelRef)
+    const resolution = resolveBodyMentions(body, candidates, sender)
+    // `@all` stands for its expansion as of this write: the Member set is
+    // snapshotted into the recipient list, so a later roster change cannot
+    // retroactively alter what this operation delivered.
+    const authored = resolution.all ? candidates.map(candidate => candidate.memberId) : resolution.memberIds
+    const merged = new Set([...explicit, ...authored])
+    merged.delete(sender)
+    return Object.freeze([...merged].sort())
+  }
+
+  /**
+   * Whether one Member has ever held Attention on one Thread. Committed Inbox
+   * deltas append a follow/unfollow observation, and the live index covers the
+   * Thread-creating Message whose initial Attention is never observed — so the
+   * two together answer "was this Member ever part of this Thread" without
+   * adding a second durable authority.
+   */
+  private everParticipated(threadRef: AgentTeamThreadRef, memberId: AgentTeamMemberId): boolean {
+    return this.everParticipatedFrom(this.state, threadRef, memberId)
+  }
+
+  private everParticipatedFrom(projection: Projection, threadRef: AgentTeamThreadRef, memberId: AgentTeamMemberId): boolean {
+    if (this.isFollowingFrom(projection, threadRef, memberId)) return true
+    return (projection.observationsByThread.get(threadRef) ?? []).some(observation => observation.memberId === memberId)
+  }
+
+  /**
+   * Split the Agent recipients an existing Thread cannot deliver to: those the
+   * body named that the Thread has never carried. The send still commits — a
+   * text mention must never fail the write — and the author is told through the
+   * result, because inviting a Member into an existing Thread stays a Human
+   * decision.
+   */
+  private undeliverableRecipients(
+    actor: AgentTeamHumanActor | AgentTeamMemberActor,
+    threadRef: AgentTeamThreadRef,
+    recipients: readonly AgentTeamMemberId[],
+  ): readonly AgentTeamMemberId[] {
+    if (actor.kind !== 'member') return Object.freeze([])
+    return Object.freeze(recipients.filter(memberId => this.state.members.has(memberId) && !this.everParticipated(threadRef, memberId)))
   }
 
   private normalizeDirection(direction: string): string {
@@ -3807,8 +3887,8 @@ export class AgentTeamLedger {
     return Object.freeze(this.committedMessageResult(operation))
   }
 
-  private replyResult(operation: AgentTeamThreadRepliedOperation): Extract<AgentTeamReplyResult, { kind: 'committed' }> {
-    return Object.freeze(this.committedMessageResult(operation))
+  private replyResult(operation: AgentTeamThreadRepliedOperation, undelivered: readonly AgentTeamMemberId[] = []): Extract<AgentTeamReplyResult, { kind: 'committed' }> {
+    return Object.freeze(this.committedMessageResult(operation, undelivered))
   }
 
   private claimResult(operation: AgentTeamClaimChangedOperation): Extract<AgentTeamClaimResult, { kind: 'committed' }> {

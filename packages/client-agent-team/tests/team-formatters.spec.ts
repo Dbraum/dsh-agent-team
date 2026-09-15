@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentTeamActivity, AgentTeamClaim, AgentTeamMemberId } from '@wowyuarm/dsh-agent-team/types'
+import type { AgentTeamActivity, AgentTeamClaim, AgentTeamClientMemberStatus, AgentTeamMemberId } from '@wowyuarm/dsh-agent-team/types'
 import { zh } from '../src/client/locales.ts'
 import type { TeamConversationProps } from '../src/client/slots.ts'
-import { formatAbsoluteTime, formatActivity, formatClaimState, formatInboxTime, formatMessageTime, formatTaskStatus, isPlainTextBody, isSingleBrandedRef, mentionNamesOf, planMessageBody, shouldClampMessage, splitBrandedRefs, splitMentionNames, taskStatusDot } from '../src/client/team-formatters.ts'
+import { allMentionMembers, containsAllMention, containsMention, formatAbsoluteTime, formatActivity, formatClaimState, formatInboxTime, formatMessageTime, formatTaskStatus, isPlainTextBody, isSingleBrandedRef, mentionNamesOf, mentionedMemberIds, planMessageBody, shouldClampMessage, splitBrandedRefs, splitMentionNames, taskStatusDot } from '../src/client/team-formatters.ts'
 
 const t = ((key: keyof typeof zh, params?: Record<string, string | number>) => {
   let value: string = zh[key]
@@ -15,6 +15,15 @@ const claim = { claimRef: 'claim:1', taskRef: 'task:1', threadRef: 'thread:1', o
 
 function activity(value: Record<string, unknown>): AgentTeamActivity {
   return { ...base, ...value } as AgentTeamActivity
+}
+
+/** One Client roster row: the fields the mention preview reads — handle, state, presence. */
+function memberStatus(memberId: string, handle: string, extra: { readonly presence?: 'available' | 'working' | 'error' | 'unavailable'; readonly state?: 'enabled' | 'suspended' | 'inactive' | 'archived' } = {}): AgentTeamClientMemberStatus {
+  return {
+    member: { memberId, handle, state: extra.state ?? 'enabled' },
+    availability: 'active',
+    presence: extra.presence ?? 'available',
+  } as unknown as AgentTeamClientMemberStatus
 }
 
 describe('Team presentation formatters', () => {
@@ -148,6 +157,47 @@ describe('Team presentation formatters', () => {
   it('keeps the Human mention renderable when the Agent roster omits it', () => {
     const handles = new Map([['member:builder' as AgentTeamMemberId, 'builder']])
     expect(mentionNamesOf(['member:human' as AgentTeamMemberId, 'member:builder' as AgentTeamMemberId], handles)).toEqual(['human', 'builder'])
+  })
+
+  it('reads one handle only when the draft writes it as an authored mention', () => {
+    expect(containsMention('请 @builder 看一下', 'builder')).toBe(true)
+    // Boundaries and the literal '@' hold in both directions: a longer handle
+    // is a different name, and an email is not a mention.
+    expect(containsMention('@builder2 请看看', 'builder')).toBe(false)
+    expect(containsMention('mail a@builder.com', 'builder')).toBe(false)
+    expect(containsMention('builder please review', 'builder')).toBe(false)
+    expect(containsMention('请 @Builder 看一下', 'builder')).toBe(true)
+    expect(containsAllMention('请评审 @all，今天截止')).toBe(true)
+    expect(containsAllMention('通知 all 成员')).toBe(false)
+    // A doubled marker is not the marker the Host expands.
+    expect(containsAllMention('ping @@all')).toBe(false)
+  })
+
+  it('derives the notified members from a draft body, not from bare names', () => {
+    const members = [memberStatus('member:builder', 'builder'), memberStatus('member:worker', 'worker')]
+    expect(mentionedMemberIds('请 @builder 看一下', members)).toEqual(['member:builder'])
+    // One Member is notified once however often the body repeats the handle,
+    // and a longer handle is never read as its prefix.
+    expect(mentionedMemberIds('@Builder 与 @builder2 与 @builder', members)).toEqual(['member:builder'])
+    expect(mentionedMemberIds('builder please review', members)).toEqual([])
+    expect(mentionedMemberIds('mail a@builder.com', members)).toEqual([])
+    expect(mentionedMemberIds('', members)).toEqual([])
+  })
+
+  it('stands a typed @all for the eligible roster and a written handle for its Member', () => {
+    const members = [
+      memberStatus('member:builder', 'builder'),
+      memberStatus('member:offline', 'offline', { presence: 'unavailable' }),
+      memberStatus('member:gone', 'gone', { state: 'archived' }),
+    ]
+    // The marker stands for the menu's own expansion, so an offline Member is
+    // left out exactly as the picker leaves it out.
+    expect(mentionedMemberIds('通知 @all 一下', members)).toEqual(['member:builder'])
+    expect(allMentionMembers(members).map(status => status.member.memberId)).toEqual(['member:builder'])
+    // A written handle is a direct call: presence does not gate it, because an
+    // offline Member is notified and reads the Message later. State still does.
+    expect(mentionedMemberIds('@offline 在吗', members)).toEqual(['member:offline'])
+    expect(mentionedMemberIds('@gone 在吗', members)).toEqual([])
   })
 
   it('accepts plain-prose bodies for literal mention rendering', () => {

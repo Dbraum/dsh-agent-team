@@ -671,7 +671,7 @@ describe('Agent Team Member lifecycle', () => {
     expect(ctx.agentTeam.threadHistory({ workspaceId, threadRef: shotThreadRef as never }).facts.some(fact => fact.kind === 'message' && fact.message?.body === 'Never committed')).toBe(false)
 
     const agentStarted = await call('team_message', { action: 'start', channelRef: channel.channel.channelRef,
-      body: 'Agent-created task for Human', mentions: [AGENT_TEAM_HUMAN_MEMBER_ID] })
+      body: 'Agent-created task for @human' })
     expect(agentStarted).toMatchObject({ kind: 'committed' })
     expect(ctx.agentTeam.inbox({ workspaceId })).toMatchObject({ totalDirectCount: 1,
       items: [expect.objectContaining({ directCount: 1 })] })
@@ -679,7 +679,7 @@ describe('Agent Team Member lifecycle', () => {
     expect(await call('team_thread', { action: 'follow', threadRef: agentStarted.threadRef })).toMatchObject({ kind: 'follow', following: true })
 
     const enrolled = await call('team_message', { action: 'start', channelRef: channel.channel.channelRef,
-      body: 'Agent-led task for the reviewer', mentions: [reviewer.status.member.memberId] })
+      body: 'Agent-led task for @reviewer' })
     expect(enrolled).toMatchObject({ kind: 'committed', threadRef: expect.any(String) })
     const enrolledThreadRef = (enrolled as { threadRef: string }).threadRef
     const reviewerAgent = ctx.agents.get(reviewer.status.member.sessionId)!
@@ -722,16 +722,18 @@ describe('Agent Team Member lifecycle', () => {
     const reply = await call('team_message', { action: 'reply', taskRef: started.task!.taskRef, body: 'Current reply', baseRevision: update.thread.revision })
     expect(reply).toMatchObject({ kind: 'committed', taskRef: started.task!.taskRef })
 
-    // A reply mentioning an Agent who does not follow the Thread rejects as
-    // member_not_following, and the structured value keeps the Host-supplied
-    // threadRef/revision passthrough — asserted at execute/result level, not
-    // only through a hand-written render fixture.
-    const notFollowing = await call('team_message', { action: 'reply', taskRef: started.task!.taskRef, body: 'Reviewer, please look', baseRevision: reply.revision, mentions: [reviewer.status.member.memberId] })
-    expect(notFollowing).toMatchObject({ kind: 'member_not_following', taskRef: started.task!.taskRef, threadRef: started.thread.threadRef, revision: reply.revision })
-    expect(notFollowing.memberIds).toEqual([reviewer.status.member.memberId])
+    // A reply naming an Agent who has never taken part in this Thread commits:
+    // a text mention never fails the write, nothing reaches that Agent, and
+    // the result reports the undelivered name — inviting a Member into an
+    // existing Thread stays a Human decision. Asserted at execute/result level,
+    // not only through a hand-written render fixture.
+    const dropped = await call('team_message', { action: 'reply', taskRef: started.task!.taskRef, body: '@reviewer, please look', baseRevision: reply.revision })
+    expect(dropped).toMatchObject({ kind: 'committed', taskRef: started.task!.taskRef, threadRef: started.thread.threadRef,
+      undeliveredMentions: [reviewer.status.member.memberId] })
+    expect(ctx.agentTeam.inboxForAgent(reviewerAgent, { workspaceId }).items.map(item => item.thread.threadRef)).toEqual([enrolledThreadRef])
 
     expect(await call('team_thread', { action: 'unfollow', taskRef: started.task!.taskRef })).toMatchObject({ following: false })
-    const claim = await call('team_claim', { action: 'claim', taskRef: started.task!.taskRef, direction: 'implementation', baseRevision: reply.revision })
+    const claim = await call('team_claim', { action: 'claim', taskRef: started.task!.taskRef, direction: 'implementation', baseRevision: dropped.revision })
     // A committed Claim mutation returns the authoritative affected Claim;
     // the structured claims archive and Task status stay real (compat) —
     // the render is what omits the archive, never the structured value.
@@ -1024,7 +1026,7 @@ describe('Agent Team Member lifecycle', () => {
     }
 
     const started = await call('team_message', { action: 'start', channelRef: channel.channel.channelRef,
-      body: 'Peer, please verify the export path', mentions: [peer.status.member.memberId] })
+      body: '@peer please verify the export path' })
     expect(started).toMatchObject({ kind: 'committed' })
 
     expect(ctx.agentTeam.inboxForAgent(peerAgent, { workspaceId })).toMatchObject({ totalUnreadCount: 1, totalDirectCount: 1,
@@ -1036,7 +1038,7 @@ describe('Agent Team Member lifecycle', () => {
     expect(adapter.requests).toHaveLength(1)
     const request = JSON.stringify(adapter.requests[0]!.messages)
     expect(request).toContain('Direct Team mention')
-    expect(request).toContain('Peer, please verify the export path')
+    expect(request).toContain('@peer please verify the export path')
     expect(request).toContain('starter')
     expect(request).toContain(started.threadRef)
     expect(request).not.toContain('Task undefined')

@@ -119,7 +119,7 @@ import type {
 
 export { agentTeamDomainSpec, agentTeamOperationSchema } from './spec.ts'
 export type * from './types.ts'
-export { AGENT_TEAM_HUMAN_MEMBER_ID, AGENT_TEAM_INITIALIZE_REQUEST_ID } from './ledger.ts'
+export { AGENT_TEAM_HUMAN_HANDLE, AGENT_TEAM_HUMAN_MEMBER_ID, AGENT_TEAM_INITIALIZE_REQUEST_ID } from './ledger.ts'
 export { AGENT_TEAM_TOOL_NAMES } from './member-runtime.ts'
 
 /** Process-stable marker carried by the final Team message tool definition. */

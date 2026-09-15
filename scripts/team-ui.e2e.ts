@@ -516,6 +516,15 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('消息内容')
   await page.getByRole('button', { name: '发送', exact: true }).waitFor()
 
+  // A handle typed by hand is delivered exactly like a pick from the menu, so
+  // the notify row must report it with no pick at all — and follow the text
+  // back out again when the name is deleted.
+  await channelComposer.fill('再确认一次 @reviewer')
+  await expect.poll(() => page.getByText(/将通知/).textContent()).toContain('@reviewer')
+  await page.screenshot({ path: join(UI04_SHOTS, 'mention-typed-notify.png'), fullPage: true })
+  await channelComposer.fill('')
+  await expect.poll(() => page.getByText(/将通知/).count()).toBe(0)
+
   // @all expansion: typing a prefix of "all" surfaces the fixed row on top of
   // the matching members; keyboard navigation highlights it and Tab accepts.
   // The expansion snapshot covers every eligible delivery member (builder,

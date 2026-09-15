@@ -1,4 +1,4 @@
-import type { AgentTeamActivity, AgentTeamClaim, AgentTeamMemberId, AgentTeamTask, AgentTeamTaskRef } from '@wowyuarm/dsh-agent-team/types'
+import type { AgentTeamActivity, AgentTeamClaim, AgentTeamClientMemberStatus, AgentTeamMemberId, AgentTeamTask, AgentTeamTaskRef } from '@wowyuarm/dsh-agent-team/types'
 import type { TeamConversationProps } from './slots.ts'
 import type { TeamStateDotState } from './TeamStateDot.tsx'
 
@@ -139,6 +139,52 @@ export function splitMentionNames(text: string, names: readonly string[]): { seg
   }
   if (cursor < text.length) segments.push({ text: text.slice(cursor), mention: false })
   return { segments, unmatched: names.filter(name => !matched.has(name.toLowerCase())) }
+}
+
+/**
+ * Whether one draft spells a handle as an authored `@mention`: a literal `@`
+ * before the handle, case-insensitively, on Unicode word boundaries. The Host
+ * resolves delivery from the same text with its own scanner, so this is the
+ * Client's single answer to "did the author call this name" — the composer
+ * prunes picked recipients with it and previews the draft's notifications with
+ * it.
+ */
+export function containsMention(body: string, handle: string): boolean {
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}_])@${escapeRegExp(handle)}(?=$|[^\\p{L}\\p{N}_])`, 'iu').test(body)
+}
+
+/** Whether one draft carries the `@all` marker the mention menu expands. */
+export function containsAllMention(body: string): boolean {
+  return /(?<![\p{L}\p{N}_@])@all(?=$|[^\p{L}\p{N}_])/u.test(body)
+}
+
+/**
+ * Every Member the mention menu's `@all` row stands for: the roster this
+ * composer was handed minus Members who cannot take a Message right now — the
+ * same filter the per-handle rows apply, so the expansion and the menu agree.
+ */
+export function allMentionMembers(members: readonly AgentTeamClientMemberStatus[]): readonly AgentTeamClientMemberStatus[] {
+  return members.filter(status => status.presence !== 'unavailable' && status.member.state !== 'inactive' && status.member.state !== 'archived')
+}
+
+/**
+ * Member ids one draft asks to notify by text alone: the Client's preview of
+ * the Host's own body mention resolution, so a hand-typed `@Handle` reports
+ * exactly like a pick from the mention menu. `@all` stands for the menu's
+ * expansion; a written handle counts whenever its Member can still take a
+ * Message — state decides, not presence, because an offline Member is notified
+ * and reads it later.
+ *
+ * The result is preview-only. Only picked recipients travel as explicit
+ * recipients, where a name the Channel cannot reach would be a rejected target
+ * rather than the prose the Host reads.
+ */
+export function mentionedMemberIds(body: string, members: readonly AgentTeamClientMemberStatus[]): readonly AgentTeamMemberId[] {
+  if (containsAllMention(body)) return allMentionMembers(members).map(status => status.member.memberId)
+  return members
+    .filter(status => status.member.state !== 'inactive' && status.member.state !== 'archived')
+    .filter(status => containsMention(body, status.member.handle))
+    .map(status => status.member.memberId)
 }
 
 /** Canonical chip handles for one Message's structured mention refs. */

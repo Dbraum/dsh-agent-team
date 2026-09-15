@@ -45,7 +45,7 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 - 关闭任务是终态：composer 槽位换成解释性提示条（`.closedBar/.closedNotice`，文案 + 唯一的重新打开动作），不再渲染禁用的输入框。taskless Thread 保持普通 reply composer。
 - 频道页与 Thread 页对称：频道页有返回行（`backToChannels` 清除 `channelRef` 回到频道列表）；时间线空/加载态在自由空间内居中（`.emptySurface` + `margin:auto`）。
 - 侧栏两个面板（Agents/Channels）都订阅 `{kind:'workspace'}` 变更；共享的 `TeamChangeStream` 按 scope 复用一条长轮询，订阅方的首次探针静默采样版本（不唤醒），唤醒只来自停泊轮询的后续解析——这是既定契约（见 `team-changes.client.spec.ts`）。
-- 发送幂等：Channel 顶层发送与 Thread reply 一致按 requestId 幂等。Channel composer 的「作为任务」是默认关闭的原生 pressed control（自绘 pill，选中态为 primary 底色，hover 不改变按压底色；形态与座位见设计语言表的「模式控件」行）；新发送显式携带 taskless 意图，选中时才原子创建 Task。`committed` 与确定性拒绝（如 `member_not_following`）后换新 id；`confirmation_required` 保留同 id 续发同一操作；传输异常保留 id 以便安全重试（Host 按 requestId 去重并返回原结果）。成功发送后「作为任务」复位为关闭。
+- 发送幂等：Channel 顶层发送与 Thread reply 一致按 requestId 幂等。Channel composer 的「作为任务」是默认关闭的原生 pressed control（自绘 pill，选中态为 primary 底色，hover 不改变按压底色；形态与座位见设计语言表的「模式控件」行）；新发送显式携带 taskless 意图，选中时才原子创建 Task。`committed` 与确定性拒绝（如 `unread_required`、`stale_revision`）后换新 id；`confirmation_required` 保留同 id 续发同一操作；传输异常保留 id 以便安全重试（Host 按 requestId 去重并返回原结果）。成功发送后「作为任务」复位为关闭。
 
 ## 排版体系
 
@@ -88,7 +88,7 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 
 ### Mention 与 Task ref 强调
 
-- mention chip 渲染：Human 字面正文在字面分段时挂 chip，Agent plain-prose 正文复用同一条 `splitMentionNames` 分段，Agent 富 Markdown 正文则在公共 `MarkdownText` 渲染完成后于普通文字节点原位替换出 chip。三种路径都只挂结构化 `mentions` 允许列表内的 handle（大小写不敏感、可选 `@`），且 effect 重跑不会对已生成的 chip 再包层；正文未出现的名字才落到尾部兜底 chip 行，不与内联 chip 重复。
+- mention chip 渲染：Human 字面正文在字面分段时挂 chip，Agent plain-prose 正文复用同一条 `splitMentionNames` 分段，Agent 富 Markdown 正文则在公共 `MarkdownText` 渲染完成后于普通文字节点原位替换出 chip。三种路径都只挂 Message 已解析 mention 列表内的 handle（大小写不敏感、可选 `@`），且 effect 重跑不会对已生成的 chip 再包层；正文未出现的名字才落到尾部兜底 chip 行，不与内联 chip 重复。
 - 已知的 branded Task ref（`task:*`）通过 Host 的 `resolveTaskRefs` 批量解析，在 Human 字面文本、Agent plain-prose 和 Agent 富 Markdown 的原出现位置渲染为可点击的 `Task #N`；不再在富 Markdown 正文下方重复补入口。富 Markdown 在公共 `MarkdownText` 完成渲染后替换普通文字节点和"整段恰好是一个 ref"的行内代码（模型把 ref 当标识符加反引号样式是常态）；代码围栏、缩进代码、混合内容的行内代码和已有链接保留原文。模型输出的双冒号/大写拼写（如 `task::…`）在 `splitBrandedRefs` 解析口统一归一化为 ledger 铸造的单冒号小写 ref 后再解析与导航。
 - 点击当前视图未加载的 Task ref 时，Client 解析其所属 Workspace、Channel 和 Thread 后跨频道跳转；解析失败的 ref 保留为非导航原文。已解析链接用原始 ref 作为 tooltip。Task number（如 `Task #12`）是 Task 在其 home Channel 内的创建序号，Host 侧单一派生（`taskNumbers`），频道任务卡、Thread 标题、跨频道 ref 解析与 Agent inbox 标注共用同一口径；序号跨频道不唯一，稳定导航身份始终是 branded Task ref。
 
@@ -123,7 +123,7 @@ Team Client 渲染在 shipped DSH 外壳内部，必须讲基础 UI 的设计语
 - mention 弹层向上展开，`role="listbox"`，textarea 以 `aria-controls/aria-activedescendant/aria-expanded` 关联；↑↓ 循环、Tab/Enter 接受候选、Escape 关闭；外点关闭复用 `useDismissOnOutsidePointer`；高度钳制复用 `useAnchoredMaxHeight`（cap 320px）。高亮行始终通过 `scrollIntoView`（`block: 'nearest'`）保持在弹层可视区内，成员多时键盘选中的候选不会被折叠隐藏。Thread 面通过 Human-only 的 `threadObservations` 读取（首屏并行一轮 + 每次 thread 域 wake）获取当前关注者集合，候选排序时关注者排在其余 roster 顺序之前——关注者收到直达投递，非关注者需要两次发送的邀请流程；Channel 面保持 roster 顺序。
 - 接受候选后光标落点精确到插入文本之后；删除提及文本会同步收缩 recipients。
 - Member Session 输入面即 shipped composer 本身，不做任何修改：Team 不注册任何成员会话的 composer 表面——无接管、无 trigger sources、无 dock 提示条。键盘合同、命令与引用菜单、附件与普通会话完全一致。
-- 收件人显式化：recipients 非空时草稿与工具栏之间渲染 quiet 提示行（`.notifyRow`，`composerNotify` 文案 + `{ids}` 句柄列表），发送前即可看到"将通知谁"；空集合不占位。
+- 收件人提示行：通知集合非空时在草稿与工具栏之间渲染 quiet 提示行（`.notifyRow`，`composerNotify` 文案 + `{ids}` 句柄列表），发送前即可看到"将通知谁"。集合是菜单选中的 recipients 与正文手打 `@Handle` 的并集（`mentionedMemberIds` 从草稿派生，与 Host 同一套大小写不敏感、Unicode 词边界的规则），`@all` 按菜单的展开口径列出全部可投递成员；空集合不占位。派生集合只用于显示，不进发送 payload——Channel 之外的名字在正文里只是散文，作为显式 recipients 会被拒绝。
 - 草稿缓存：draft/recipients 不在页面局部，而是按 `channel:<channelRef>` / `thread:<threadRef>` 键存入每 Client 上下文一份的 `TeamDraftStore`（`drafts.ts`，单一 localStorage 键 `dsh.agent-team.drafts.v1`，写穿持久化、按 savedAt 淘汰最旧 ~50 条）。切换视图或刷新后草稿与收件人原样恢复；发送提交成功即清除对应键，失败保留；Composer 挂载收敛会剔除不再匹配文本/已失效的收件人。Channel 的「作为任务」意图不进入草稿缓存：默认关闭，成功提交后再次复位关闭。
 - taskless Thread 的「转为任务」是 Human-only durable mutation，不做乐观 overlay。成功后重新读取 Thread 与补充 Channel/Member 投影；unread/stale fence 时保留 Host 返回错误并重新读取相关事实。
 

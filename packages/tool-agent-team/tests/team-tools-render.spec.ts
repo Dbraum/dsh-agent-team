@@ -358,6 +358,20 @@ describe('team_message renders its outcome', () => {
     expect(occurrences(text, 'baseRevision')).toBe(1)
   })
 
+  it('reply: an undelivered mention is reported beside the commit, never instead of it', () => {
+    const text = renderText(teamTools().get('team_message')!, { action: 'reply', threadRef: THREAD, baseRevision: 8201, body: 'x' }, {
+      kind: 'committed', action: 'reply', messageRef: 'message:9a1e', threadRef: THREAD, revision: 8203,
+      undeliveredMentions: ['member:6d5ac10d-3ef6-4466-a1f7-d105ca1b6da5'],
+    })
+    expect(text).toContain('Committed — reply added.')
+    expect(text).toContain(`message:9a1e · ${THREAD}`)
+    expect(text).toContain('Mention not delivered — member:6d5ac10d-3ef6-4466-a1f7-d105ca1b6da5 never took part in this Thread')
+    expect(text).toContain('ask the Human')
+    // The Message committed, so the next-write token is still handed over.
+    expect(occurrences(text, 'baseRevision')).toBe(1)
+    expect(text).toContain('Next write — baseRevision: 8203')
+  })
+
   it('dm: Delivered vs Recorded-not-delivered with the no-blind-duplicate warning', () => {
     const delivered = renderText(teamTools().get('team_message')!, { action: 'dm', memberRef: 'member:peer', body: 'x' }, {
       kind: 'dm-sent', recipientMemberId: 'member:peer', recipientHandle: 'Cole', delivered: true,

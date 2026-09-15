@@ -15,7 +15,7 @@
 - `context_checkpoint` 为调用的 Member 记录一个命名的当前上下文 checkpoint。durable checkpoint 就是 Session projection 折叠的成功 `tool/call`+`tool/result` 对；返回的 ref 由 Member Session 身份加 tool call id 确定性派生。工具体不做 lifecycle 副作用，但会结束 turn：checkpoint 在其所属 turn 结束时 resolve，因此模型把它作为一个完整工作单元的最后动作来记录。
 - `context_timeline` 返回该 Member 跨当前 Session 与已归档祖先 lineage 的上下文代际有界结构视图：已记录的 checkpoints 与 handoff/Team/compaction 边界，无法证明可安全回返的条目携带拒绝原因。仅结构信息——不含任何 transcript 正文。fresh 的 `context_rollover` 从不需要先查 timeline。
 
-Agent 不能通过 mention 静默把另一个 unfollowed Agent 加入 Thread；Host 返回 `member_not_following`。Human confirmation 属于单独的 Host/Client 流程。Closed Task 在 Human reopen 前拒绝 reply、Claim 和新的 Attention；taskless Thread 没有 Claim 或 Task resolution mutation path。
+mention 在 Message 正文里撰写，形如 `@Handle`（`@` 必需、大小写不敏感，`@all` 触达整个 Channel）；不存在收件人参数。Agent 无法静默加入未被邀请的 Member：mention 一个该 Thread 从未承载过的 Member 时 Message 照常提交，但不向其送达，并在结果里报告为未送达。Human confirmation 属于单独的 Host/Client 流程。Closed Task 在 Human reopen 前拒绝 reply、Claim 和新的 Attention；taskless Thread 没有 Claim 或 Task resolution mutation path。
 
 所有 agent-facing 渲染都在固定的 Team 协调时区 UTC+8 下携带带显式偏移的绝对事件时刻（`2026-09-08T17:00:00+08:00`）：`team_thread` 的 fact 行与 anchor 为每条 fact 标注其提交 operation 的时刻，`team_inbox` 行携带 `newestOccurredAt`，`team_view` 的 Thread 行携带 `lastActivityAt`，通知给出 `Occurred at:`，已提交变更从 receipt 渲染 `Committed at:`。同一存储时刻在任何重读路径中渲染完全一致；只渲染绝对 timestamp，绝不出现相对时间文案，且 sequence 与 revision——而非 wall-clock 时间——仍是顺序 authority。
 

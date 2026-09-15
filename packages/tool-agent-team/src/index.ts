@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import AgentTeam, { AgentTeamDmDeliveryError, markAgentTeamPreset } from '@wowyuarm/dsh-agent-team/host'
+import AgentTeam, { AGENT_TEAM_HUMAN_HANDLE, AgentTeamDmDeliveryError, markAgentTeamPreset } from '@wowyuarm/dsh-agent-team/host'
 import { formatTeamTimestamp } from '@wowyuarm/dsh-agent-team/time-format'
 import { registerContextTools } from './context-tools.ts'
 import { member, service } from './host-access.ts'
@@ -415,7 +415,7 @@ function adviceLines(advice: ContextAdviceView): string[] {
 
 const teamMessage = markAgentTeamPreset(defineTool({
   name: 'team_message',
-  description: 'Start a top-level Thread, reply to an existing Thread, or send a direct message (DM). Read the Thread first: a reply needs the current next-write token from a fully drained team_thread read (or your own last committed mutation), and unread work rejects before staleness is even checked. start defaults to a taskless Thread; pass asTask true to create a Task in the same send. A top-level start may mention related Agents directly; in replies, only a Human can invite an unfollowed Agent. Pass Member refs in mentions and spell their handles inside the body; only mentioned Members render as mention chips. dm sends a private direct message to one enabled Agent Member in your Workspace: use it for quick clarifications and status syncs — never for task work, decisions, or anything that needs team visibility or traceability (use a Thread); if a DM exchange with the same Member exceeds about 3 exchanges, move it to a Thread, because every DM costs the recipient a full agent turn.',
+  description: 'Start a top-level Thread, reply to an existing Thread, or send a direct message (DM). Read the Thread first: a reply needs the current next-write token from a fully drained team_thread read (or your own last committed mutation), and unread work rejects before staleness is even checked. start defaults to a taskless Thread; pass asTask true to create a Task in the same send. A top-level start may mention related Agents directly; in replies, only a Human can invite a Member the Thread has never carried. Mention by writing `@Handle` in body — the `@` is required, matching ignores case, and each named Member is delivered to and renders as a mention chip; `@all` reaches every Member of the Channel. Naming a Member this Thread has never carried still commits, delivers nothing to that Member, and reports them under undeliveredMentions: ask the Human to invite them, or reach them with a dm. dm sends a private direct message to one enabled Agent Member in your Workspace: use it for quick clarifications and status syncs — never for task work, decisions, or anything that needs team visibility or traceability (use a Thread); if a DM exchange with the same Member exceeds about 3 exchanges, move it to a Thread, because every DM costs the recipient a full agent turn.',
   parameters: {
     action: { type: 'string', required: true, enum: ['start', 'reply', 'dm'] },
     channelRef: { type: 'string', description: "Full branded Channel ref exactly as returned by Team tools, including the 'channel:' prefix. An unambiguous abbreviation of the first 6+ UUID hex characters also resolves." },
@@ -423,8 +423,7 @@ const teamMessage = markAgentTeamPreset(defineTool({
     taskRef: { type: 'string', description: "Optional Task ref alias for reply on a Taskful Thread. Prefer threadRef; an unambiguous abbreviation of the first 6+ UUID hex characters also resolves." },
     memberRef: { type: 'string', description: "Full branded Member ref exactly as returned by Team tools, including the 'member:' prefix. An unambiguous abbreviation of the first 6+ UUID hex characters also resolves. Required for dm; the Member must be an enabled Agent in your Workspace (the Human cannot be DMed)." },
     asTask: { type: 'boolean', description: 'When true, start creates a Task with the Thread. Default false creates a taskless Thread.' },
-    body: { type: 'string', required: true, description: "Markdown body. Lead with the conclusion or state. Mention the Human only when they must know or decide; when a decision is owed, say plainly what needs deciding and what happens by default if nobody answers — no fixed template. Keep it the shortest useful message for the recipients; mechanical detail follows below. Cite Team refs exactly as returned, as bare text with one colon (e.g. task:0f0a…) — never a double colon, never inside backticks or quotes. Unambiguous UUID abbreviations (first 6+ hex chars) also resolve. Spell each mentioned Member's handle in the prose so the mention renders inline." }, baseRevision: { type: 'number', description: "The next-write token from your latest fully drained team_thread read (or your own last committed mutation) on this Thread. Copy the explicitly rendered value verbatim; never increment, derive, compare, or cite it — it is an opaque concurrency token, not a fact about the Thread." },
-    mentions: { type: 'array', items: { type: 'string' }, description: 'Member refs to mention. Mentioned Agents receive the Message directly; write their handles in the body (any casing, optional @) so the mention renders inline.' },
+    body: { type: 'string', required: true, description: "Markdown body. Lead with the conclusion or state. Mention the Human only when they must know or decide; when a decision is owed, say plainly what needs deciding and what happens by default if nobody answers — no fixed template. Keep it the shortest useful message for the recipients; mechanical detail follows below. Cite Team refs exactly as returned, as bare text with one colon (e.g. task:0f0a…) — never a double colon, never inside backticks or quotes. Unambiguous UUID abbreviations (first 6+ hex chars) also resolve. Mention a Member by writing `@Handle` (`@` required, case-insensitive) in the prose: that is what delivers the Message to them and renders the mention chip, and `@all` reaches the whole Channel." }, baseRevision: { type: 'number', description: "The next-write token from your latest fully drained team_thread read (or your own last committed mutation) on this Thread. Copy the explicitly rendered value verbatim; never increment, derive, compare, or cite it — it is an opaque concurrency token, not a fact about the Thread." },
     attachments: { type: 'array', items: { type: 'string' }, description: 'Absolute file paths to share, e.g. screenshots or generated artifacts; images render as thumbnails for recipients. The Host validates each path and copies the file into the attachment cache, and members also receive one cached path per attachment; if any path fails validation the whole send is rejected.' },
   },
   output: {
@@ -432,6 +431,7 @@ const teamMessage = markAgentTeamPreset(defineTool({
       kind: { type: 'string', required: true }, action: { type: 'string' }, taskRef: { type: 'string' }, threadRef: { type: 'string' }, revision: { type: 'number' },
       expectedRevision: { type: 'number' }, messageRef: { type: 'string' }, memberIds: { type: 'array', items: { type: 'string' } }, unreadCount: { type: 'number' }, directCount: { type: 'number' },
       recipientMemberId: { type: 'string' }, recipientHandle: { type: 'string' }, delivered: { type: 'boolean' }, deliveryNote: { type: 'string' }, occurredAt: { type: 'string' },
+      undeliveredMentions: { type: 'array', items: { type: 'string' } },
     } },
     render: (_args, value) => {
       if (value.kind === 'dm-sent') {
@@ -447,6 +447,9 @@ const teamMessage = markAgentTeamPreset(defineTool({
           value.action === 'start' ? 'Committed — Thread created.' : 'Committed — reply added.',
           [value.messageRef, value.threadRef, ...(value.taskRef === undefined ? [] : [value.taskRef])].join(' · '),
           ...(value.occurredAt === undefined ? [] : [`Committed at ${formatTeamTimestamp(value.occurredAt)}`]),
+          ...(value.undeliveredMentions === undefined || value.undeliveredMentions.length === 0 ? [] : [
+            `Mention not delivered — ${value.undeliveredMentions.join(', ')} never took part in this Thread, so nothing reached them. Only a Human can invite a Member: reach them with a dm, or ask the Human.`,
+          ]),
           nextWriteLine(value.revision),
         ].join('\n') }]
       }
@@ -465,20 +468,19 @@ const teamMessage = markAgentTeamPreset(defineTool({
     if (agent === undefined) throw new Error('team_message requires an Agent session')
     const current = member(agent)
     const host = service(agent)
-    const mentions = args.mentions as AgentTeamMemberId[] | undefined
     const rawPaths = args.attachments
     const attachmentPaths = Array.isArray(rawPaths) ? rawPaths.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '') : undefined
     const paths = attachmentPaths !== undefined && attachmentPaths.length > 0 ? { attachmentPaths } : {}
     if (args.action === 'start') {
       if (args.channelRef === undefined || args.taskRef !== undefined || args.threadRef !== undefined || args.baseRevision !== undefined) throw new Error('start requires channelRef and does not accept threadRef, taskRef, or baseRevision')
       const result = await host.sendMessageForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: current.workspaceId,
-        channelRef: args.channelRef as never, body: args.body, asTask: args.asTask === true, ...(mentions === undefined ? {} : { recipients: mentions }), ...paths })
+        channelRef: args.channelRef as never, body: args.body, asTask: args.asTask === true, ...paths })
       return messageOutcome(result, 'start')
     }
     if (args.action === 'dm') {
       if (args.memberRef === undefined || args.channelRef !== undefined || args.threadRef !== undefined || args.taskRef !== undefined
-        || args.baseRevision !== undefined || args.asTask !== undefined || mentions !== undefined || attachmentPaths !== undefined) {
-        throw new Error('dm requires memberRef and body only; it does not accept channelRef, threadRef, taskRef, baseRevision, asTask, mentions, or attachments')
+        || args.baseRevision !== undefined || args.asTask !== undefined || attachmentPaths !== undefined) {
+        throw new Error('dm requires memberRef and body only; it does not accept channelRef, threadRef, taskRef, baseRevision, asTask, or attachments')
       }
       try {
         const result = await host.dmForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: current.workspaceId,
@@ -498,16 +500,21 @@ const teamMessage = markAgentTeamPreset(defineTool({
     const result = await host.replyForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: current.workspaceId,
       ...(args.threadRef === undefined ? {} : { threadRef: args.threadRef as AgentTeamThreadRef }),
       ...(args.taskRef === undefined ? {} : { taskRef: args.taskRef as AgentTeamTaskRef }),
-      body: args.body, baseRevision,
-      ...(mentions === undefined ? {} : { recipients: mentions }), ...paths })
+      body: args.body, baseRevision, ...paths })
     return messageOutcome(result, 'reply')
   },
 }))
 
 function messageOutcome(result: Awaited<ReturnType<AgentTeam['sendMessageForAgent']>> | Awaited<ReturnType<AgentTeam['replyForAgent']>>, action: 'start' | 'reply') {
-  if (result.kind === 'committed') return { kind: result.kind, action, threadRef: result.thread.threadRef,
-    ...(result.task === undefined ? {} : { taskRef: result.task.taskRef }),
-    revision: result.thread.revision, messageRef: result.message.messageRef, occurredAt: result.receipt.occurredAt }
+  if (result.kind === 'committed') {
+    // A start always delivers to the Members it names — they begin following the
+    // new Thread — so only a reply can report names the Thread has never carried.
+    const undelivered = 'undeliveredMentions' in result ? result.undeliveredMentions : undefined
+    return { kind: result.kind, action, threadRef: result.thread.threadRef,
+      ...(result.task === undefined ? {} : { taskRef: result.task.taskRef }),
+      revision: result.thread.revision, messageRef: result.message.messageRef, occurredAt: result.receipt.occurredAt,
+      ...(undelivered === undefined || undelivered.length === 0 ? {} : { undeliveredMentions: [...undelivered] }) }
+  }
   if (result.kind === 'member_not_following') return { kind: result.kind, memberIds: [...result.memberIds],
     ...(result.taskRef === undefined ? {} : { taskRef: result.taskRef }), ...(result.threadRef === undefined ? {} : { threadRef: result.threadRef, revision: result.revision }) }
   if (result.kind === 'unread_required') return { kind: result.kind, ...(result.taskRef === undefined ? {} : { taskRef: result.taskRef }), threadRef: result.threadRef,
@@ -652,7 +659,7 @@ const teamView = defineTool({
     return {
       channels: view.channels.map(channel => ({ channelRef: channel.channelRef, name: channel.name })),
       members: [
-        { memberId: view.humanMemberId, kind: 'human', handle: 'human', description: 'Human Team Member', presence: 'available' },
+        { memberId: view.humanMemberId, kind: 'human', handle: AGENT_TEAM_HUMAN_HANDLE, description: 'Human Team Member', presence: 'available' },
         ...host.members().filter(status => visibleMemberIds.has(status.member.memberId)).map(status => ({ memberId: status.member.memberId,
           kind: 'agent', handle: status.member.handle, description: status.member.description, presence: status.presence })),
       ],

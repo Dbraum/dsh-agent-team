@@ -5,6 +5,7 @@ import { IconChecklistOutline14, IconPaperclipOutline16, IconSendOutline16, Tool
 import type { TeamConversationProps } from './slots.ts'
 import type { TeamDraftKey, TeamDraftStore } from './drafts.ts'
 import { TeamPresenceDot } from './TeamPresenceDot.tsx'
+import { allMentionMembers, containsAllMention, containsMention, mentionedMemberIds } from './team-formatters.ts'
 import css from './composer.module.css'
 import { formatByteSize } from './attachment-preview.ts'
 
@@ -28,14 +29,6 @@ function findMention(draft: string, caret: number): MentionMatch | undefined {
   return { start: at, end: caret, query: beforeCaret.slice(at + 1) }
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function containsMention(draft: string, handle: string): boolean {
-  return new RegExp(`(?:^|[^\\p{L}\\p{N}_])@${escapeRegExp(handle)}(?=$|[^\\p{L}\\p{N}_])`, 'u').test(draft)
-}
-
 function mentionCandidates(members: readonly AgentTeamClientMemberStatus[], query: string): readonly AgentTeamClientMemberStatus[] {
   const normalized = query.toLocaleLowerCase()
   return members.filter(status => status.presence !== 'unavailable'
@@ -48,15 +41,6 @@ function mentionCandidates(members: readonly AgentTeamClientMemberStatus[], quer
 function rankMentionCandidates(candidates: readonly AgentTeamClientMemberStatus[], followers: ReadonlySet<AgentTeamMemberId> | undefined): readonly AgentTeamClientMemberStatus[] {
   if (followers === undefined || followers.size === 0) return candidates
   return [...candidates].sort((left, right) => Number(followers.has(right.member.memberId)) - Number(followers.has(left.member.memberId)))
-}
-
-/** Every member a manual handle pick could reach: the @all expansion snapshot. */
-function allMentionMembers(members: readonly AgentTeamClientMemberStatus[]): readonly AgentTeamClientMemberStatus[] {
-  return members.filter(status => status.presence !== 'unavailable' && status.member.state !== 'inactive' && status.member.state !== 'archived')
-}
-
-function containsAllMention(draft: string): boolean {
-  return /(?:^|[^\p{L}\p{N}_])@all(?=$|[^\p{L}\p{N}_])/u.test(draft)
 }
 
 /** One object URL per draft file; revoked when the draft is removed. */
@@ -165,14 +149,17 @@ export function TeamComposer({ members, followerMemberIds, drafts, draftKey, pen
     inputRef.current?.focus({ preventScroll: true })
   }, [confirmation, pending])
 
+  // Handle lookup for both directions of the same judgement: whether a picked
+  // recipient is still spelled in the text, and which Members the text names.
+  const memberHandles = new Map(members.map(status => [status.member.memberId, status.member.handle]))
+
   const pruneRecipients = (nextDraft: string): void => {
     // An @all marker stands for its expansion snapshot: the member handles it
     // stands for are not in the text, so text-based pruning must stand down.
     if (containsAllMention(nextDraft)) return
-    const knownMembers = new Map(members.map(status => [status.member.memberId, status.member]))
     const next = new Set([...recipients].filter(memberId => {
-      const member = knownMembers.get(memberId)
-      return member !== undefined && containsMention(nextDraft, member.handle)
+      const handle = memberHandles.get(memberId)
+      return handle !== undefined && containsMention(nextDraft, handle)
     }))
     if (next.size !== recipients.size) drafts.writeRecipients(draftKey, next)
   }
@@ -185,6 +172,11 @@ export function TeamComposer({ members, followerMemberIds, drafts, draftKey, pen
     if (members.length === 0) return
     pruneRecipients(draft)
   }, [draft, recipients, members])
+
+  // The notify row reports what the Host will resolve from this draft, not just
+  // what the mention menu picked: an authored `@Handle` delivers exactly like a
+  // pick, and `@all` stands for the menu's expansion.
+  const notifiedIds = [...new Set([...recipients, ...mentionedMemberIds(draft, members)])].sort()
 
   const updateMention = (nextDraft: string, caret: number): void => {
     const match = findMention(nextDraft, caret)
@@ -345,7 +337,7 @@ export function TeamComposer({ members, followerMemberIds, drafts, draftKey, pen
           onCompositionEnd={() => { setTimeout(() => { composingRef.current = false }, 10) }}
         />
       </div>
-      {recipients.size > 0 && <p className={css.notifyRow} data-team-notify>{t('composerNotify', { ids: [...recipients].sort().map(memberId => `@${members.find(candidate => candidate.member.memberId === memberId)?.member.handle ?? memberId}`).join(', ') })}</p>}
+      {notifiedIds.length > 0 && <p className={css.notifyRow} data-team-notify>{t('composerNotify', { ids: notifiedIds.map(memberId => `@${memberHandles.get(memberId) ?? memberId}`).join(', ') })}</p>}
       {onFilesChange !== undefined && pendingFiles !== undefined && pendingFiles.length > 0 && (
         <ul className={css.fileChips} aria-label={t('attachFiles')}>
           {pendingFiles.map((file, index) => {

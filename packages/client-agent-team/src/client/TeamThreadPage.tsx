@@ -19,7 +19,7 @@ import { TeamComposer } from './TeamComposer.tsx'
 import { diagnosticText, TeamPresenceDot } from './TeamPresenceDot.tsx'
 import { TeamMessage } from './TeamMessage.tsx'
 import { TeamRunDivider } from './TeamRunDivider.tsx'
-import { formatActivity, formatClaimState, formatTaskStatus, formatTaskTitle, mentionNamesOf, taskStatusDot } from './team-formatters.ts'
+import { formatActivity, formatClaimState, formatTaskStatus, formatTaskTitle, mentionNamesOf, mentionedMemberIds, taskStatusDot } from './team-formatters.ts'
 import { TeamStateDot } from './TeamStateDot.tsx'
 import { mintRequestId, uploadComposerFiles } from './requests.ts'
 import { ScopeCoverage, type ScopeWake } from './scope-coverage.ts'
@@ -679,8 +679,12 @@ export function TeamThreadPage(props: TeamThreadPageProps) {
       }
       if (result.value.kind === 'committed') {
         const committed = result.value as Extract<typeof result.value, { kind: 'committed' }>
+        // The optimistic row chips what the Host is about to report: a
+        // hand-typed `@Handle` delivers exactly like a picked recipient, and the
+        // committed facts replace this row as soon as they arrive.
+        const optimisticMentions = [...new Set([...recipients, ...mentionedMemberIds(draft, channelMembers)])].sort()
         setCurrentFacts(current => {
-          const merged = mergeFacts(current, [{ kind: 'message', sequence: committed.message.sequence, message: committed.message, mentions: [...recipients].sort(), occurredAt: committed.receipt.occurredAt }])
+          const merged = mergeFacts(current, [{ kind: 'message', sequence: committed.message.sequence, message: committed.message, mentions: optimisticMentions, occurredAt: committed.receipt.occurredAt }])
           currentFactsRef.current = merged
           return merged
         })

@@ -372,6 +372,12 @@ export interface AgentTeamReplyCommittedResult {
   readonly thread: AgentTeamThread
   readonly attention: readonly AgentTeamThreadAttention[]
   readonly directMarkers: readonly AgentTeamDirectMarker[]
+  /**
+   * Agents named in the body that this Thread has never carried. The Message
+   * still commits; these Members simply receive no notification, and the
+   * author is told so it can ask the Human to invite them.
+   */
+  readonly undeliveredMentions?: readonly AgentTeamMemberId[]
 }
 
 export type AgentTeamReplyResult =

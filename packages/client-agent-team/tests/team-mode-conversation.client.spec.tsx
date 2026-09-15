@@ -245,6 +245,36 @@ describe('Team conversation surfaces', () => {
     await b.runtime.dispose()
   })
 
+  it('previews a hand-typed mention without turning it into an explicit recipient', async () => {
+    const b = await runtimeWithTeam()
+    fireEvent.click(b.view.getByRole('button', { name: '团队' }))
+    fireEvent.click(await b.view.findByRole('button', { name: '新建频道' }))
+    fireEvent.change(b.view.getByLabelText('名称'), { target: { value: 'review' } })
+    fireEvent.click(b.view.getByRole('button', { name: /初始成员/ }))
+    fireEvent.click(await within(document.body).findByRole('menuitem', { name: /builder/ }))
+    fireEvent.click(b.view.getByRole('button', { name: '创建频道' }))
+    fireEvent.click(await b.view.findByRole('button', { name: '# review' }))
+    expect(await b.view.findByRole('heading', { name: '# review' })).toBeTruthy()
+    const input = await b.view.findByRole('textbox', { name: '消息内容' }) as HTMLTextAreaElement
+
+    // No pick from the mention menu: the row still reports the name the Host
+    // will resolve out of the body, and drops it when the text loses the name.
+    fireEvent.change(input, { target: { value: '请 @builder 看一下' } })
+    await waitFor(() => expect(b.view.getByText(/将通知/).textContent).toContain('@builder'))
+    fireEvent.change(input, { target: { value: '请看一下' } })
+    await waitFor(() => expect(b.view.queryByText(/将通知/)).toBeNull())
+
+    // The Host owns body resolution: the payload keeps explicit recipients
+    // empty, because a name the Channel cannot reach is prose, not a target.
+    fireEvent.change(input, { target: { value: '请 @builder 看一下' } })
+    fireEvent.click(b.view.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(b.sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      body: '请 @builder 看一下',
+      recipients: [],
+    })))
+    await b.runtime.dispose()
+  })
+
   it('accepts an unclaimed todo Task directly without a confirm dialog', async () => {
     const b = await runtimeWithTeam({
       mode: 'team', workspaceId: 'w1', initialChannels: true,

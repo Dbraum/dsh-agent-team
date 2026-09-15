@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+- Mentions are authored in the Message body: writing `@Handle` — or `@all` for the whole Channel — is what notifies a Member, from the Web composer and from `team_message` alike, and the separate recipient parameter is gone. Naming someone a Thread has never carried no longer fails the write: the Message commits, nothing reaches them, and the result reports them as undelivered. A Human mention that needs an invitation still asks for confirmation first. The composer's "will notify" line reports those body-authored names too, so a handle typed by hand reads the same as one picked from the menu.
+
 - The Channel member dialog, the Channel editor's member section, the sidebar Agent list, and the footer Member roster now draw people the same way: one shared row with the presence-bearing avatar, the handle over its description, and a single membership action.
 
 - A joined Member who is temporarily unavailable can still be removed from a Channel; only joining needs an active Member.

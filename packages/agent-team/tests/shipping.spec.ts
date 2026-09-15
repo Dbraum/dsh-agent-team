@@ -161,8 +161,15 @@ describe('Agent Team shipping contract', () => {
     // mechanical detail moves below the conclusion rather than being dropped.
     expect(preset).toContain('Lead with the conclusion or state; put mechanical detail')
     expect(preset).toContain('never drop detail a peer Member needs, move it below')
-    expect(preset).toContain('mention the Human — that is how they are notified')
+    expect(preset).toContain('mention the Human as @human — that is how they are notified')
     expect(preset).toContain('what needs deciding and what happens by default')
+    // One mention rule, and it is body-authored: the `@` is what makes a
+    // mention, `@all` reaches the Channel, and a Member an existing Thread has
+    // never carried is reported back rather than silently enrolled or refused.
+    expect(preset).toContain('Mention a Member by writing `@Handle` in the Message body')
+    expect(preset).toContain('`@all` reaches every Member of the Channel')
+    expect(preset).toContain('never carried still commits your message, but delivers nothing to that Member')
+    expect(preset).not.toContain('pass structured Member refs in the mentions parameter')
     // The persona keeps only the physical facts of the private space
     // (absolute paths, memory/notes discipline, reusable-assets boundary);
     // skill craft itself lives in the bundled member-skill-manager and its

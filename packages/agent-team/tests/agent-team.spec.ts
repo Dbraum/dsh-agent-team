@@ -100,12 +100,13 @@ async function addLedgerMember(
   channelRef: string | undefined,
   memberId = `member:agent-${crypto.randomUUID()}`,
   description = 'Test Agent',
+  handle = memberId.slice('member:'.length),
 ): Promise<{ readonly member: AgentTeamAgentMember; readonly actor: AgentTeamMemberActor }> {
   const member: AgentTeamAgentMember = {
     memberId: memberId as never,
     sessionId: SessionId(`session:${memberId}`),
     workspaceId: alpha,
-    handle: memberId.slice('member:'.length),
+    handle,
     description,
     presetId: 'team-member',
     privateMemoryPath: `/tmp/${memberId}`,
@@ -2089,5 +2090,109 @@ describe('AgentTeam durable Thread read progress', () => {
     expect(booted[0]).toBeDefined()
     expect(booted[1]).toEqual(booted[0])
     expect(booted[2]).toEqual(booted[0])
+  })
+})
+
+describe('body-authored mentions', () => {
+  /** One Channel and every write in it run through the same ledger projection. */
+  async function channelOf(test: TeamHarness) {
+    const ledger = replayLedger(test)
+    const created = (await ledger.createChannel({ requestId: requestId('channel'), actor: agentTeamHumanActor(), workspaceId: alpha,
+      name: 'engineering', description: 'Engineering work' })).value
+    return { ledger, channelRef: created.channel.channelRef }
+  }
+
+  /** A Member with a readable handle and a realistic branded id. */
+  const enroll = (ledger: AgentTeamLedger, channelRef: string, handle: string) =>
+    addLedgerMember(ledger, channelRef, `member:${crypto.randomUUID()}`, 'Test Agent', handle)
+
+  const start = async (ledger: AgentTeamLedger, channelRef: string, body: string) =>
+    withTask(committed((await ledger.sendMessage({ requestId: requestId(`start:${crypto.randomUUID()}`), actor: agentTeamHumanActor(),
+      asTask: true, workspaceId: alpha, channelRef: channelRef as never, body })).value))
+
+  it('drops a body mention the Thread has never carried and reports it as undelivered', async () => {
+    const test = await harness()
+    const { ledger, channelRef } = await channelOf(test)
+    const sent = await start(ledger, channelRef, 'Investigate the regression')
+    const author = await enroll(ledger, channelRef, 'author')
+    const stranger = await enroll(ledger, channelRef, 'stranger')
+
+    // A text mention never fails the write. Inviting a Member into an existing
+    // Thread stays a Human decision, so the named Member is reported instead.
+    const reply = committed((await ledger.reply({ requestId: requestId('reply'), workspaceId: alpha, taskRef: sent.task.taskRef,
+      body: '@stranger, please look at this', baseRevision: sent.thread.revision, actor: author.actor })).value)
+    expect(reply.message.body).toBe('@stranger, please look at this')
+    expect(reply.undeliveredMentions).toEqual([stranger.member.memberId])
+    expect(reply.directMarkers).toEqual([])
+    expect(ledger.attentionStatus(stranger.actor, { workspaceId: alpha, threadRef: sent.thread.threadRef }).attention).toBeUndefined()
+    expect(ledger.inbox(stranger.actor, { workspaceId: alpha })).toEqual({ items: [], totalUnreadCount: 0, totalDirectCount: 0 })
+  })
+
+  it('delivers to a Member the Thread already carried, even after it unfollowed', async () => {
+    const test = await harness()
+    const { ledger, channelRef } = await channelOf(test)
+    const peer = await enroll(ledger, channelRef, 'peer')
+    const author = await enroll(ledger, channelRef, 'author')
+
+    // A body mention on a new Thread enrolls the peer: they follow it.
+    const sent = await start(ledger, channelRef, '@peer, please join')
+    expect(ledger.attentionStatus(peer.actor, { workspaceId: alpha, taskRef: sent.task.taskRef }).attention).toBeDefined()
+    await ledger.changeAttention({ requestId: requestId('unfollow'), workspaceId: alpha, taskRef: sent.task.taskRef, action: 'unfollow', actor: peer.actor })
+    expect(ledger.attentionStatus(peer.actor, { workspaceId: alpha, taskRef: sent.task.taskRef }).attention).toBeUndefined()
+
+    // Having taken part once is what makes the mention deliverable: re-joining a
+    // Thread a Member already belonged to is not an invitation.
+    const reply = committed((await ledger.reply({ requestId: requestId('reply'), workspaceId: alpha, taskRef: sent.task.taskRef,
+      body: '@peer, back on this please', baseRevision: sent.thread.revision, actor: author.actor })).value)
+    expect(reply.undeliveredMentions).toBeUndefined()
+    expect(reply.directMarkers).toEqual([expect.objectContaining({ memberId: peer.member.memberId })])
+    expect(ledger.attentionStatus(peer.actor, { workspaceId: alpha, threadRef: sent.thread.threadRef }).attention).toBeDefined()
+    expect(ledger.inbox(peer.actor, { workspaceId: alpha })).toMatchObject({ totalUnreadCount: 1, totalDirectCount: 1 })
+  })
+
+  it('keeps the Human confirmation step for a body mention, then delivers once confirmed', async () => {
+    const test = await harness()
+    const { ledger, channelRef } = await channelOf(test)
+    const sent = await start(ledger, channelRef, 'Investigate the regression')
+    const stranger = await enroll(ledger, channelRef, 'stranger')
+
+    const held = (await ledger.reply({ requestId: requestId('reply'), workspaceId: alpha, taskRef: sent.task.taskRef,
+      body: '@stranger, please look', baseRevision: sent.thread.revision, actor: agentTeamHumanActor() })).value
+    if (held.kind !== 'confirmation_required') throw new Error(`expected confirmation, received ${held.kind}`)
+    // Nothing commits while the Human has not confirmed, and the Flow survives
+    // re-resolution of the same body.
+    expect(ledger.attentionStatus(stranger.actor, { workspaceId: alpha, threadRef: sent.thread.threadRef }).attention).toBeUndefined()
+
+    const invited = committed((await ledger.reply({ requestId: requestId('reply-confirmed'), workspaceId: alpha, taskRef: sent.task.taskRef,
+      body: '@stranger, please look', baseRevision: sent.thread.revision, actor: agentTeamHumanActor(), confirmationToken: held.confirmationToken })).value)
+    expect(invited.directMarkers).toEqual([expect.objectContaining({ memberId: stranger.member.memberId })])
+    expect(ledger.attentionStatus(stranger.actor, { workspaceId: alpha, threadRef: sent.thread.threadRef }).attention).toBeDefined()
+  })
+
+  it('expands @all to the roster as of that write', async () => {
+    const test = await harness()
+    const { ledger, channelRef } = await channelOf(test)
+    const first = await enroll(ledger, channelRef, 'first')
+    const second = await enroll(ledger, channelRef, 'second')
+
+    const sent = committed((await ledger.sendMessage({ requestId: requestId('all'), actor: agentTeamHumanActor(), workspaceId: alpha,
+      channelRef: channelRef as never, body: '@all, standup in ten minutes' })).value)
+    const late = await enroll(ledger, channelRef, 'late')
+
+    // The expansion is snapshotted into the operation: a Member who joins the
+    // Channel afterwards is not retroactively addressed by this write.
+    expect(sent.directMarkers.map(marker => marker.memberId).sort()).toEqual([first.member.memberId, second.member.memberId].sort())
+    expect(ledger.inbox(late.actor, { workspaceId: alpha })).toEqual({ items: [], totalUnreadCount: 0, totalDirectCount: 0 })
+  })
+
+  it('merges explicit recipients with body mentions without duplicating a Member', async () => {
+    const test = await harness()
+    const { ledger, channelRef } = await channelOf(test)
+    const first = await enroll(ledger, channelRef, 'first')
+    const second = await enroll(ledger, channelRef, 'second')
+
+    const sent = committed((await ledger.sendMessage({ requestId: requestId('merge'), actor: agentTeamHumanActor(), workspaceId: alpha,
+      channelRef: channelRef as never, body: '@first please look', recipients: [first.member.memberId, second.member.memberId] })).value)
+    expect(sent.directMarkers.map(marker => marker.memberId).sort()).toEqual([first.member.memberId, second.member.memberId].sort())
   })
 })
