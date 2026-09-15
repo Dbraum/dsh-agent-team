@@ -631,6 +631,39 @@ describe('AgentTeam durable Thread Attention ledger', () => {
       .toEqual(['Old task', 'Old discussion', 'Please review this'])
   })
 
+  it('reports how much of a Thread a bounded read left behind, so a returning reader can size what it has not read', async () => {
+    const test = await harness()
+    const channel = await test.ctx.agentTeam.createChannel({ requestId: requestId('channel'), workspaceId: alpha, name: 'engineering', description: 'Engineering work' })
+    const started = withTask(committed(await test.ctx.agentTeam.sendMessage({ asTask: true, requestId: requestId('start'), workspaceId: alpha, channelRef: channel.channel.channelRef, body: 'Thread anchor' })))
+    committed(await test.ctx.agentTeam.reply({ requestId: requestId('history'), workspaceId: alpha, taskRef: started.task.taskRef, body: 'Older discussion', baseRevision: started.thread.revision }))
+    const ledger = replayLedger(test)
+    const { actor } = await addLedgerMember(ledger, channel.channel.channelRef, 'member:reviewer', 'Reviews changes', 'reviewer')
+    // Joining takes the watermark to the tail, so the two facts already in the
+    // Thread stay behind an Attention period this member has never read through.
+    const joined = (await ledger.changeAttention({ requestId: requestId('follow'), workspaceId: alpha, taskRef: started.task.taskRef, action: 'follow', actor })).value
+    expect(joined.attention).toMatchObject({ readThroughSequence: 4 })
+
+    // The Thread moves on, and this member is answered with the background
+    // window plus the new fact — while the count states the span behind both.
+    const moved = committed((await ledger.reply({ requestId: requestId('moved-on'), workspaceId: alpha, taskRef: started.task.taskRef, body: 'Two days later', baseRevision: joined.thread.revision, actor: agentTeamHumanActor() })).value)
+    const returning = (await ledger.readThread({ requestId: requestId('returning-read'), workspaceId: alpha, taskRef: started.task.taskRef, actor })).value
+    expect(returning.facts.filter(entry => entry.unread).map(entry => entry.fact.sequence)).toEqual([moved.receipt.sequence])
+    // Two facts exist before that batch; both are inside the response's own
+    // background window, which is why the count is measured from what the
+    // response starts at rather than from the watermark it advances to.
+    expect(returning.earlierFactCount).toBe(2)
+  })
+
+  it('a read that reached a Thread\'s first fact reports nothing left behind it', async () => {
+    const test = await harness()
+    const channel = await test.ctx.agentTeam.createChannel({ requestId: requestId('channel'), workspaceId: alpha, name: 'engineering', description: 'Engineering work' })
+    const started = withTask(committed(await test.ctx.agentTeam.sendMessage({ asTask: true, requestId: requestId('start'), workspaceId: alpha, channelRef: channel.channel.channelRef, body: 'Only task' })))
+    // The Thread holds one fact and this read acknowledges it, so the span
+    // before what it was shown is empty and the render stays silent about it.
+    const read = await test.ctx.agentTeam.readThread({ requestId: requestId('read'), workspaceId: alpha, taskRef: started.task.taskRef, actor: agentTeamHumanActor() })
+    expect(read.earlierFactCount).toBe(0)
+  })
+
   it('gates existing Thread mutations on unread work before revision and makes reads idempotent', async () => {
     const test = await harness()
     const channel = await test.ctx.agentTeam.createChannel({ requestId: requestId('channel'), workspaceId: alpha, name: 'engineering', description: 'Engineering work' })

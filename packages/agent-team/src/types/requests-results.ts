@@ -605,6 +605,16 @@ export interface AgentTeamThreadReadResult {
   readonly readThroughSequence: number
   /** Number of unread facts left after this bounded read. */
   readonly remainingUnreadCount: number
+  /**
+   * Public Thread facts that precede the watermark this read reaches — where
+   * the reader now stands in the Thread, and how much of it that position has
+   * never shown it. A returning reader's batch answers with the newest facts
+   * alone, so this is the span it is not looking at; the count never depends on
+   * whether this particular response happened to carry background. Zero means
+   * the Thread holds nothing before the reader's position. Absent on a legacy
+   * read snapshot, whose stored shape stays frozen.
+   */
+  readonly earlierFactCount?: number
   readonly attention?: AgentTeamThreadAttention
   readonly consumedDirectMarkers: readonly AgentTeamDirectMarker[]
   /** Present only when this read acknowledged an unread acceptance of a still-done Task. */

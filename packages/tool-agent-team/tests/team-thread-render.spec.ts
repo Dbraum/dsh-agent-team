@@ -161,4 +161,40 @@ describe('team_thread renders the model-facing decision surface', () => {
     expect(text).toContain('could not be measured')
     expect(text).not.toContain('usageTokens')
   })
+
+  it('a read that left facts behind states how many, so a returning reader sees the span it is not looking at', () => {
+    const text = renderText(teamTools().get('team_thread')!, {}, {
+      kind: 'read', threadRef: 'thread:x', revision: 400, following: true,
+      anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor', sequence: 1 },
+      claims: [],
+      facts: [{ sequence: 400, kind: 'message', body: 'the mention', sender: 'human', mentions: [], unread: true, direct: true, occurredAt: '2026-09-15T06:00:00.000Z' }],
+      readThroughSequence: 400, remainingUnreadCount: 0, earlierFactCount: 137,
+    })
+    // The watermark alone never said how much the reader had not seen: the
+    // count is what turns "you are here" into "this much precedes you".
+    expect(text).toContain('Read through sequence 400')
+    expect(text).toContain('Earlier facts: 137')
+    expect(text).toContain('team_thread.history')
+  })
+
+  it('a read that reached everything renders no earlier-facts line, and an absent count stays valid', () => {
+    const reached = renderText(teamTools().get('team_thread')!, {}, {
+      kind: 'read', threadRef: 'thread:x', revision: 12, following: true,
+      anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor', sequence: 1 },
+      claims: [],
+      facts: [{ sequence: 12, kind: 'message', body: 'caught up', sender: 'human', mentions: [], unread: true, direct: false, occurredAt: '2026-09-15T06:00:00.000Z' }],
+      readThroughSequence: 12, remainingUnreadCount: 0, earlierFactCount: 0,
+    })
+    expect(reached).not.toContain('Earlier facts')
+    // A legacy read snapshot carries no count at all; the render must stay
+    // valid and silent rather than inventing one.
+    const legacy = renderText(teamTools().get('team_thread')!, {}, {
+      kind: 'read', threadRef: 'thread:x', revision: 12, following: true,
+      anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor', sequence: 1 },
+      claims: [], facts: [],
+      readThroughSequence: 12, remainingUnreadCount: 0,
+    })
+    expect(legacy).not.toContain('Earlier facts')
+    expect(legacy).toContain('Read through sequence 12')
+  })
 })

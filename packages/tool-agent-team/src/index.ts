@@ -251,7 +251,7 @@ const teamThread = defineTool({
     schema: { type: 'object', additionalProperties: false, properties: {
       kind: { type: 'string', required: true }, threadRef: { type: 'string', required: true }, taskRef: { type: 'string' },
       revision: { type: 'number', required: true }, status: { type: 'string' }, resolution: { type: 'string' }, taskNumber: { type: 'number' },
-      following: { type: 'boolean', required: true }, readThroughSequence: { type: 'number' }, remainingUnreadCount: { type: 'number' }, cursor: { type: 'number' }, hasMore: { type: 'boolean' },
+      following: { type: 'boolean', required: true }, readThroughSequence: { type: 'number' }, remainingUnreadCount: { type: 'number' }, earlierFactCount: { type: 'number' }, cursor: { type: 'number' }, hasMore: { type: 'boolean' },
       anchor: { type: 'object', required: true, additionalProperties: false, properties: {
         messageRef: { type: 'string', required: true }, sender: { type: 'string', required: true }, body: { type: 'string', required: true }, sequence: { type: 'number', required: true }, occurredAt: { type: 'string' },
       } },
@@ -327,6 +327,12 @@ const teamThread = defineTool({
       if (facts.length === 0) lines.push('No new facts to acknowledge.')
       else lines.push(...facts.map(fact => factLine(fact)))
       lines.push('', `Read through sequence ${value.readThroughSequence}; ${remaining} unread update(s) remaining${remaining > 0 ? ' — call team_thread read again.' : '.'}`)
+      // What this bounded read answered with is the newest batch; the span
+      // before the watermark is the orientation it did not supply. Rendering
+      // the count is what lets a returning reader see the size of that span
+      // instead of assuming the batch is the Thread.
+      const earlier = value.earlierFactCount ?? 0
+      if (earlier > 0) lines.push(`Earlier facts: ${earlier} — read older ones with team_thread.history.`)
       if (value.contextAdvice !== undefined) lines.push('', ...adviceLines(value.contextAdvice))
       if (remaining === 0) lines.push('', nextWriteLine(value.revision))
       return [{ type: 'text', text: lines.join('\n') }]
@@ -367,7 +373,7 @@ const teamThread = defineTool({
     const read = await host.readThreadForAgent(agent, { requestId: requestId(agent.id, exec.callId), ...base })
     return threadResult('read', read, read.attention, read.facts.map(entry => entry.fact.kind === 'message'
         ? { sequence: entry.fact.sequence, kind: 'message', body: entry.fact.message.body, sender: entry.fact.message.sender, mentions: [...entry.fact.mentions], unread: entry.unread, direct: entry.direct, occurredAt: entry.fact.occurredAt }
-        : activityFactView(entry.fact.sequence, entry.fact.activity, { unread: entry.unread, direct: entry.direct }, entry.fact.occurredAt)), { readThroughSequence: read.readThroughSequence, remainingUnreadCount: read.remainingUnreadCount, ...(read.contextAdvice === undefined ? {} : { contextAdvice: adviceView(read.contextAdvice) }), ...taskNumberOf(read.task) })
+        : activityFactView(entry.fact.sequence, entry.fact.activity, { unread: entry.unread, direct: entry.direct }, entry.fact.occurredAt)), { readThroughSequence: read.readThroughSequence, remainingUnreadCount: read.remainingUnreadCount, ...(read.earlierFactCount === undefined ? {} : { earlierFactCount: read.earlierFactCount }), ...(read.contextAdvice === undefined ? {} : { contextAdvice: adviceView(read.contextAdvice) }), ...taskNumberOf(read.task) })
   },
 })
 
@@ -389,8 +395,8 @@ function threadResult(
   snapshot: Awaited<ReturnType<AgentTeam['readThreadForAgent']>> | ReturnType<AgentTeam['threadHistoryForAgent']>,
   attention: Awaited<ReturnType<AgentTeam['readThreadForAgent']>>['attention'],
   facts: FactView[],
-  extra: { cursor?: number; hasMore?: boolean; readThroughSequence?: number; remainingUnreadCount?: number; contextAdvice?: ContextAdviceView; taskNumber?: number } = {},
-): { anchor: { messageRef: string; sender: string; body: string; sequence: number; occurredAt?: string }; threadRef: string; revision: number; kind: string; following: boolean; taskRef?: string; status?: string; resolution?: string; taskNumber?: number; readThroughSequence?: number; remainingUnreadCount?: number; cursor?: number; hasMore?: boolean; claims: ClaimView[]; facts: FactView[]; contextAdvice?: ContextAdviceView } {
+  extra: { cursor?: number; hasMore?: boolean; readThroughSequence?: number; remainingUnreadCount?: number; earlierFactCount?: number; contextAdvice?: ContextAdviceView; taskNumber?: number } = {},
+): { anchor: { messageRef: string; sender: string; body: string; sequence: number; occurredAt?: string }; threadRef: string; revision: number; kind: string; following: boolean; taskRef?: string; status?: string; resolution?: string; taskNumber?: number; readThroughSequence?: number; remainingUnreadCount?: number; earlierFactCount?: number; cursor?: number; hasMore?: boolean; claims: ClaimView[]; facts: FactView[]; contextAdvice?: ContextAdviceView } {
   return {
     kind, threadRef: snapshot.thread.threadRef, revision: snapshot.thread.revision,
     ...(snapshot.task === undefined ? {} : { taskRef: snapshot.task.taskRef, status: snapshot.task.status, resolution: snapshot.task.resolution }),

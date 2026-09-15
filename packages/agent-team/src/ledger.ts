@@ -333,6 +333,7 @@ interface PreparedRead extends PreparedReadReceipt {
   readonly anchorMentions: readonly AgentTeamMemberId[]
   readonly facts: readonly AgentTeamThreadReadFact[]
   readonly remainingUnreadCount: number
+  readonly earlierFactCount: number
 }
 
 interface Projection {
@@ -2074,7 +2075,10 @@ export class AgentTeamLedger {
       if (isThreadReadSnapshot(data)) {
         // The pre-receipt form froze the whole picture, so its expected value
         // is re-derived the same way it was written: from this record's prior
-        // projection only, never from the live one.
+        // projection only, never from the live one. That shape stays frozen —
+        // a field added after it, like the orientation count, is not compared
+        // here, because no stored legacy record carries it and inventing one
+        // would reject every upgrade of a ledger written before the field.
         const expected = this.prepareReadFrom(projection, data.memberId, data.workspaceId, target)
         const expectedData = Object.freeze({ workspaceId: data.workspaceId, memberId: data.memberId,
           ...(expected.task === undefined ? {} : { task: expected.task }), thread: expected.thread, claims: expected.claims, anchor: expected.anchor,
@@ -2842,9 +2846,21 @@ export class AgentTeamLedger {
     const combined = [...background.map(fact => this.readFactFrom(projection, memberId, fact, false)), ...receipt.unread.slice(0, 20)]
       .sort((left, right) => left.fact.sequence - right.fact.sequence)
     const remainingUnreadCount = this.remainingUnreadAfter(projection, memberId, receipt)
+    // What this bounded read leaves behind it: the Thread facts that precede the
+    // watermark it reaches, which is where this reader now stands in the Thread
+    // and how much of it that position has never shown it. Anchoring on the
+    // watermark rather than on the response's own oldest fact is what keeps a
+    // returning reader honest — the background window starts at the Thread's
+    // first fact whenever the Thread is short enough to fit it, so measuring
+    // from the response would report nothing behind a reader that has in fact
+    // never read the Thread. Derived from the projection the read resolved
+    // against, like every other field of this picture, so a replay re-derives
+    // the same number.
+    const earlierFactCount = this.threadFactsFrom(projection, thread.threadRef)
+      .filter(fact => fact.sequence < receipt.readThroughSequence).length
     return Object.freeze({ ...receipt, claims: task === undefined ? Object.freeze([]) : this.claimsForTaskFrom(projection, task.taskRef), anchor,
       anchorMentions: projection.mentionsByMessage.get(anchor.messageRef) ?? [],
-      facts: Object.freeze(combined), remainingUnreadCount })
+      facts: Object.freeze(combined), remainingUnreadCount, earlierFactCount })
   }
 
   private readFactFrom(projection: Projection, memberId: AgentTeamMemberId, fact: AgentTeamThreadFact, unread: boolean): AgentTeamThreadReadFact {
@@ -3923,6 +3939,7 @@ export class AgentTeamLedger {
     return Object.freeze({ ...(prepared.task === undefined ? {} : { task: prepared.task }), thread: prepared.thread,
       claims: prepared.claims, anchor: prepared.anchor, anchorMentions: prepared.anchorMentions, facts: prepared.facts,
       readThroughSequence: prepared.readThroughSequence, remainingUnreadCount: prepared.remainingUnreadCount,
+      earlierFactCount: prepared.earlierFactCount,
       ...(prepared.attention === undefined ? {} : { attention: prepared.attention }),
       consumedDirectMarkers: prepared.inbox.directMarkers.removed })
   }

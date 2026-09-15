@@ -304,6 +304,7 @@ const threadReadSnapshotDataSchema = z.object({
   facts: z.array(readFactSchema),
   readThroughSequence: z.number().int().nonnegative(),
   remainingUnreadCount: z.number().int().nonnegative(),
+  earlierFactCount: z.number().int().nonnegative().optional(),
   attention: attentionSchema.optional(),
   inbox: inboxDeltaSchema,
 }).strict().transform(omitUndefined)
