@@ -22,7 +22,7 @@
 corepack pnpm install
 ```
 
-`pnpm-workspace.yaml` 将 `packages/*` 纳入 workspace，并关闭自动 peer 安装。根项目的 `node_modules` 和相邻 Harness checkout 提供本地开发所需的包与源码映射。
+`pnpm-workspace.yaml` 并不把 `packages/*` 声明为 workspace member：本仓库只发布一个根 npm 包，三个 `packages/*` 目录是这个 workspace 的构建目标，而不是可独立安装的 package。但该文件仍是承重配置——它关闭自动 peer 安装，并携带本仓库依赖的构建许可与发布年龄设置——因此不要因为某个目录没有自己的 manifest 就改动或删除它。根项目的 `node_modules` 和相邻 Harness checkout 提供本地开发所需的包与源码映射。
 
 ## 检查梯度
 
@@ -33,10 +33,13 @@ npm run generate:typert
 npm run typecheck
 npm run check:docs
 npm run check:core-skills
+npm run check:boundaries
 npm test
 npm run build
 npm run lint
+npm run duplication
 npm pack --dry-run
+git diff --check
 ```
 
 这些命令的职责如下：
@@ -45,10 +48,12 @@ npm pack --dry-run
 - `npm run typecheck`：先生成 Typert，再检查 Host、tools 和 Client 三个源码目录。
 - `npm run check:docs`：把 [`AGENTS.md`](AGENTS.md) 的规则变成机械检查——每份维护文档都有双语配对且切换器双向指对、所有相对链接可解析、两个索引与现存文档集完全一致；同时覆盖四组 README 配对（仓库根与每个 package 各一份，各自使用自己的切换器写法）。只改文档时单独跑它即可。
 - `npm run check:core-skills`：把随包 skill 的出厂契约变成机械检查——front matter 的 `name` 与目录同名、`description` 说明真实触发场景、整个 skill 不超过 `scripts/check-core-skills.mjs` 中的审定字符预算、所有相对链接都不越出 skill 目录（安装器只复制该目录）、`references/` 下的每个文件都被 `SKILL.md` 链接。
-- `npm test`：先生成 Typert、跑 `check:docs` 与 `check:core-skills`，再运行 Vitest。Vitest 通过 `scripts/isolate-dsh-home.setup.ts` 给每个测试文件一个一次性的 `DSH_HOME`，隔离 Member activation 创建或复用的 `$DSH_HOME/agent-team/members/member:*` 私有 memory。需要特定 home 的测试自行设置并保存/恢复该变量（见 `member-lifecycle.spec.ts`）。启动不会自动清理账本不认识的 Member 目录；显式 Member remove 才删除该 Member 的私有 memory，因此介质重置后如需清理旧目录，由操作者手动删除对应 `member:` 目录。
+- `npm run check:boundaries`：把下文的 package 接缝变成机械检查——`packages/*/src/` 下的文件不得用相对 specifier 跨越自己所在的 package 目录去引用另一个 package。`import type` 豁免（运行时已被擦除），测试文件不在范围内（它们本就要把目录接起来）。跨接缝的正确方式是用声明的 subpath，例如 `@wowyuarm/dsh-agent-team/remote`。
+- `npm test`：先生成 Typert、跑 `check:docs`、`check:core-skills` 与 `check:boundaries`，再运行 Vitest。Vitest 通过 `scripts/isolate-dsh-home.setup.ts` 给每个测试文件一个一次性的 `DSH_HOME`，隔离 Member activation 创建或复用的 `$DSH_HOME/agent-team/members/member:*` 私有 memory。需要特定 home 的测试自行设置并保存/恢复该变量（见 `member-lifecycle.spec.ts`）。启动不会自动清理账本不认识的 Member 目录；显式 Member remove 才删除该 Member 的私有 memory，因此介质重置后如需清理旧目录，由操作者手动删除对应 `member:` 目录。
 - `npm run build`：先由受限 Node cleaner 清空 Host、tools 与 Client 三个 package 的 `lib/`，再生成 Typert、构建三个源码目录，并用 Harness 的 `tsdown` 构建 Client bundle；这样删除源码后遗留的旧产物不会进入 pack。最终发布物仍是一个根 npm 包。
 - `npm run lint`：运行 oxlint。
-- `npm pack --dry-run`：检查根 bundle 的发布内容。
+- `npm run duplication`：用 `.jscpd.json` 对 `packages` 与 `scripts` 跑 jscpd。它的输出只是"值得看一眼的地方"，不是结论——移动或重构过的代码同样会被报成重复。
+- `npm pack --dry-run`：检查根 bundle 的发布内容；`prepack` 会先跑完整 build，所以它是发布前置步骤，不是日常检查。
 
 影响 browser bundle、Client module、slot、Remote activation、bundle manifest 或可见 UI 的改动，还要运行：
 
@@ -116,6 +121,56 @@ node scripts/sync-paths.mjs
 ```
 
 `tsconfig*.json` path facades 不应添加 `include` 或 `files`；它们需要保持对当前仓库文件和相邻 Harness source/declaration 的匹配行为。
+
+## Package 接缝与模块布局
+
+发布物是一个根 npm 包 `@wowyuarm/dsh-agent-team`，由根 `package.json` 及其 `exports` map 声明。三个 `packages/*` 目录没有自己的 manifest：它们是这个单一包的构建与导出接缝，各自有构建目标和 `exports` 条目。
+
+```text
+@wowyuarm/dsh-agent-team               根 manifest，一个发布包
+├── packages/agent-team         → ./host、./types、./typert、./remote 等
+├── packages/tool-agent-team    → ./tools
+└── packages/client-agent-team  → .（插件入口）与 ./client
+```
+
+因此消费方一律通过声明的 subpath（`@wowyuarm/dsh-agent-team/host`、`/remote`、`/types`、`/tools`、`/client`）访问，而不是用相对路径进入另一个目录的 `lib/`。生成的 `tsconfig*.json` facades 与 Client bundler 都映射这些 subpath；源码层跨接缝写相对导入，等于绕过"让生成产物可替换"的那份契约本身。`scripts/harness-dir.mjs` 是这些映射解析相邻 Harness checkout 的唯一指针。
+
+Host 源码刻意保持扁平。`packages/agent-team/src/` 按文件划分 authority 与接缝，有三个结构锚点——`index.ts` 是 composition root 与 Remote adapter，`ledger.ts` 是 durable authority，`spec.ts` 与 `types.ts` barrel 持有 record schema 与公开类型。其余每个文件都是一个 earned seam；它们各自的归属见 [`architecture.zh.md`](architecture.zh.md)。
+
+由此有两条机械结论，遵守它们比事后修复便宜：
+
+- **接缝由第二个调用方、第二个 adapter 或独立持有的状态换来，而不是由行数换来。** `index.ts` 与 `ledger.ts` 大，是因为它们承载 composition 与 authority，不是因为缺了一层；不要为了让单个文件变小而拆它们，也不要在真的出现第二份实现之前引入 `services/`、`utils/`、`adapters/` 目录。
+- **薄改名或纯转发要删掉，而不是留作接缝。** 一个只做 re-export、只转发 props、只改名的模块不持有状态也不持有不变式；把调用内联，或删掉契约已经死掉的那一侧。
+
+## 新增一条 Host operation
+
+一条 durable Team operation 是一个纵切 authority 层的完整切片，不是按层拆分的任务清单。类型、record、commit、projection 与读表面要在同一次改动里配齐；ledger 会拒绝自己无法 replay 的 record，因此半成品切片会明确报错，而不是静默通过。
+
+```text
+types/operations.ts   operation record 类型
+spec.ts               该 kind 的 record schema
+ledger.ts             commit 方法 + per-kind change scope + 校验 + projection application
+index.ts              授权并分派的 @Remote(...) action
+types/requests-results.ts   公开的 request 与 result 形状
+```
+
+必须同时改动的六个机械表面：
+
+1. **Kind 与 record。** 在 `spec.ts` 中把 operation kind 作为 `z.literal` 加进它的 record schema，并在 `types/operations.ts` 加上带类型的 record。
+2. **公开形状。** 在 `types/requests-results.ts` 加上 request 与 result 类型；`types.ts` 是公开 barrel 会自动 re-export，不需要逐 operation 编辑。
+3. **Commit。** 加上由 `operationBase(...)` 与下一个 sequence 构造 record 的 ledger 方法，以及它会唤醒的 change scope。
+4. **校验与 projection。** 扩展 ledger 的 per-kind commit 校验与校验入口，并加上把该 record 应用到 projection 的 case。replay 正确性就在这里——加载时没有应用的 projection 会与 durable table 分叉。
+5. **Host 与 Remote。** 在 `index.ts` 加上 `@Remote('<action>')` 方法：授权、以 Human 或 Member actor 分派给 ledger、发出 committed receipt。
+6. **测试与文档。** 覆盖 commit、replay、授权与 projection 效果；然后更新该事实的归属文档（边界改 `architecture.md`，语义改 `domain-model.md`，面向模型的契约改 `team-collaboration.md`）。
+
+invariant companion 是"被覆盖"而不是"要扩展"：`invariant.ts` 注册一个 `agentTeam` invariant，在 mount 时与每次 commit 后校验整个 durable ledger，所以只要新 operation 能 replay 就自动纳入覆盖。只有当新 record 形状需要 projection validator 尚未断言的关系时才扩展它。
+
+这份清单依赖两条边界：
+
+- operation-kind 语义集中在 `ledger.ts`。不要为了缩短文件把它们拆到新模块，也不要把 `spec.ts` 的 record schema 抽成共享 helper——per-kind 的空壳是刻意的，而一个 kind 的校验只有与它的 projection 放在一起才有意义。
+- 新 operation 不等于新 service。它经由现有 ledger 与现有 Remote adapter 进入；不新增 store、不新增平行 projection、不新增第二个 authority。
+
+验证用 `npm run typecheck`、最窄的 Host 测试目标，以及当该 operation 到达 Client 时的 `npm run test:browser`。`npm run check:boundaries` 会随 `npm test` 一起跑，若改动用相对路径而非声明 subpath 跨越 package 就会失败。
 
 ## 沙箱与 CI 环境
 

@@ -22,7 +22,7 @@ Install dependencies with the command specified by the root README:
 corepack pnpm install
 ```
 
-`pnpm-workspace.yaml` includes `packages/*` in the workspace and disables automatic peer installation. The root `node_modules` and adjacent Harness checkout provide the packages and source mappings needed for local development.
+`pnpm-workspace.yaml` does not declare `packages/*` as workspace members: the repository publishes one root npm package and its three `packages/*` directories are build targets of that one workspace, not independently installable packages. The file is still load-bearing — it disables automatic peer installation and carries the build-approval and release-age settings this repository relies on — so do not change or remove it because a directory lacks its own manifest. The root `node_modules` and adjacent Harness checkout provide the packages and source mappings needed for local development.
 
 ## Verification gradient
 
@@ -33,9 +33,11 @@ npm run generate:typert
 npm run typecheck
 npm run check:docs
 npm run check:core-skills
+npm run check:boundaries
 npm test
 npm run build
 npm run lint
+npm run duplication
 npm pack --dry-run
 git diff --check
 ```
@@ -46,10 +48,12 @@ Their responsibilities are:
 - `typecheck` regenerates Typert and checks Host, tools, and Client sources.
 - `check:docs` mechanically enforces the rules in [`AGENTS.md`](AGENTS.md): every maintained document has a bilingual pair with a working switcher, every relative link resolves, and both indexes name exactly the documents that exist. It covers the four README pairs as well — the repository root and one per package — each with its own switcher wording. Run it on its own for a documentation-only change.
 - `check:core-skills` mechanically enforces the shipped skill contract under `packages/agent-team/core-skills/`: the front matter names the skill after its directory and its description names real triggers, the whole skill stays inside the reviewed budget in `scripts/check-core-skills.mjs`, every relative link stays inside the skill directory (an installer copies that directory alone), and every file under `references/` is linked from `SKILL.md`.
-- `test` regenerates Typert, runs `check:docs` and `check:core-skills`, then runs Vitest. `scripts/isolate-dsh-home.setup.ts` gives each test file an isolated `DSH_HOME`; tests needing a particular home must save and restore it. Startup does not prune ledger-unknown Member directories; explicit Member removal removes that Member's private memory.
+- `check:boundaries` mechanically enforces the package seams described below: no file under `packages/*/src/` may reach another package by a relative specifier that escapes its own package directory. `import type` is exempt because it is erased before runtime, and test files are out of scope because they deliberately wire directories together. Declared subpaths such as `@wowyuarm/dsh-agent-team/remote` are the supported way to cross a seam.
+- `test` regenerates Typert, runs `check:docs`, `check:core-skills`, and `check:boundaries`, then runs Vitest. `scripts/isolate-dsh-home.setup.ts` gives each test file an isolated `DSH_HOME`; tests needing a particular home must save and restore it. Startup does not prune ledger-unknown Member directories; explicit Member removal removes that Member's private memory.
 - `build` uses the restricted Node cleaner to clear package `lib/` directories, regenerates Typert, builds all three source trees, and uses Harness `tsdown` for the Client bundle. The published artifact remains one root npm package.
 - `lint` runs oxlint.
-- `pack --dry-run` checks the root bundle's published contents.
+- `duplication` runs jscpd over `packages` and `scripts` using `.jscpd.json`; treat its output as a place to look, never as a verdict, because it reports moved and restructured code as readily as copied code.
+- `pack --dry-run` checks the root bundle's published contents; `prepack` runs the full build first, so it is a release prerequisite rather than an everyday check.
 
 Changes affecting browser bundles, Client modules, slots, Remote activation, bundle manifests, or visible UI must also run:
 
@@ -110,6 +114,56 @@ node scripts/sync-paths.mjs
 ```
 
 The `tsconfig*.json` facades must not gain `include` or `files`; they must continue matching repository files and adjacent Harness source/declarations.
+
+## Package seams and module layout
+
+The published artifact is one root npm package, `@wowyuarm/dsh-agent-team`, declared by the root `package.json` and its `exports` map. The three `packages/*` directories have no manifest of their own: they are the build and export seams of that single package, each with its own build target and its own entry in `exports`.
+
+```text
+@wowyuarm/dsh-agent-team               root manifest, one published package
+├── packages/agent-team         → ./host, ./types, ./typert, ./remote, …
+├── packages/tool-agent-team    → ./tools
+└── packages/client-agent-team  → . (the plugin entry) and ./client
+```
+
+Consumers therefore reach a package through a declared subpath (`@wowyuarm/dsh-agent-team/host`, `/remote`, `/types`, `/tools`, `/client`), never through a relative path into another directory's `lib/`. The generated `tsconfig*.json` facades and the Client bundler both map those subpaths, so a source-level relative import across seams bypasses the very contract that keeps generated artifacts swappable. `scripts/harness-dir.mjs` is the single pointer those mappings resolve the adjacent Harness checkout through.
+
+Host source is deliberately flat. `packages/agent-team/src/` separates authority from seams by file, with three structural anchors — `index.ts` is the composition root and Remote adapter, `ledger.ts` is the durable authority, and `spec.ts` plus the `types.ts` barrel own the record schema and the public types. Every other file is one earned seam; [`architecture.md`](architecture.md) names them and what each owns.
+
+Two mechanical consequences follow, and both are cheaper to obey than to repair:
+
+- **A seam is earned by a second caller, a second adapter, or independently owned state** — not by line count. `index.ts` and `ledger.ts` are large because they hold composition and authority, not because a layer is missing; do not split either one to make a file smaller, and do not introduce `services/`, `utils/`, or `adapters/` directories before a real second implementation exists.
+- **A thin rename or forwarder is deleted, not kept as a seam.** A new module that only re-exports, only forwards props, or only renames an existing call carries no state and no invariant; keep the call inline or remove the dead side of the contract.
+
+## Adding a Host operation
+
+A durable Team operation is one vertical slice through the authority layer, not a per-layer task list. Add the type, the record, the commit, the projection, and the read surface in the same change; the ledger rejects a record it cannot replay, so a partial slice fails loudly rather than silently.
+
+```text
+types/operations.ts   the operation record type
+spec.ts               the record schema for that kind
+ledger.ts             commit method + per-kind change scope + validation + projection application
+index.ts              the @Remote(...) action that authorizes and dispatches
+types/requests-results.ts   the public request and result shapes
+```
+
+The six mechanical surfaces that must change together:
+
+1. **Kind and record.** Add the operation kind as a `z.literal` in its record schema in `spec.ts`, and its typed record in `types/operations.ts`.
+2. **Public shapes.** Add the request and result types to `types/requests-results.ts`; `types.ts` is the public barrel and re-exports them, so it needs no per-operation edit.
+3. **Commit.** Add the ledger method that builds the record from `operationBase(...)` plus the next sequence, and the change scope it wakes.
+4. **Validation and projection.** Extend the ledger's per-kind commit validation and its validation entry point, and add the case that applies the record to a projection. Replay correctness lives here — a projection that is not applied on load diverges from the durable table.
+5. **Host and Remote.** Add the `@Remote('<action>')` method in `index.ts`: authorize, dispatch to the ledger with the Human or Member actor, and emit the committed receipt.
+6. **Tests and docs.** Cover commit, replay, authorization, and the projection effect; then update the owning maintained document (`architecture.md` for boundaries, `domain-model.md` for semantics, `team-collaboration.md` for a model-facing contract).
+
+The invariant companion is checked, not extended: `invariant.ts` registers one `agentTeam` invariant that validates the whole durable ledger at mount and after commits, so a new operation is covered automatically once it replays. Extend it only when the new record shape needs a relationship the projection validator does not already assert.
+
+Two boundaries this checklist depends on:
+
+- Operation-kind semantics stay concentrated in `ledger.ts`. Do not split them across new modules to shorten the file, and do not factor the `spec.ts` record schemas into shared helpers — the per-kind shells are deliberate, and a kind's validation is only meaningful beside its projection.
+- A new operation is not a new service. It enters through the existing ledger and the existing Remote adapter; it does not add a store, a parallel projection, or a second authority.
+
+Verify with `npm run typecheck`, the narrowest Host test target, and `npm run test:browser` when the operation reaches the Client. `npm run check:boundaries` runs as part of `npm test` and fails if the change reaches another package by a relative path instead of a declared subpath.
 
 ## Sandbox and CI environments
 

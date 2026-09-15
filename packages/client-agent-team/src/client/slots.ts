@@ -160,5 +160,4 @@ export interface TeamMemberGroup {
 
 export type TeamFooterProps = PropsRuntime<'sidebar.footer.action'> & PropsLocale<'team'> & TeamNavigationActions & {
   navigation: TeamNavigationSource
-  loadMemberGroups: () => Promise<readonly TeamMemberGroup[]>
 }

@@ -12,13 +12,30 @@ const bundle = clientBundle('@wowyuarm/dsh-agent-team', [
   'lib/types/index.js',
 ])
 
-export default async (options: Parameters<typeof bundle>[0]) => (await bundle(options)).map(entry => ({
-  ...entry,
-  resolve: {
-    ...entry.resolve,
-    alias: {
-      ...entry.resolve?.alias,
-      '@wowyuarm/dsh-agent-team/remote': resolve('../../../packages/agent-team/lib/typert.remote-client.js'),
-    },
+// The Team Remote resolves through its own plugin rather than `resolve.alias`.
+// tsdown reads the client's tsconfig `paths`, whose `/remote` entry points at
+// the generated `.d.ts` for the type facets, and that mapping is what resolves
+// this specifier; the generated runtime artifact is the one the package's own
+// `./remote` export declares as `default`. The plugin therefore pins the
+// specifier explicitly instead of leaving it to a mapping that targets types.
+//
+// The target is anchored to this config file, never to the process cwd. The
+// earlier `resolve('../../../packages/...')` form was relative to whatever
+// directory the config ran from — tsdown runs from `packages/client-agent-team`,
+// one level deeper than the repository root the string was written for, so it
+// silently pointed outside the repository.
+const teamRemoteTarget = resolve(import.meta.dirname, '../agent-team/lib/typert.remote-client.js')
+const teamRemote = {
+  name: 'dsh-agent-team-remote-entrypoint',
+  resolveId(source: string) {
+    return source === '@wowyuarm/dsh-agent-team/remote' ? teamRemoteTarget : null
   },
-}))
+}
+
+export default async (options: Parameters<typeof bundle>[0]) => {
+  const configs = await bundle(options)
+  return configs.map(entry => ({
+    ...entry,
+    plugins: [...(entry.plugins ?? []), teamRemote],
+  }))
+}

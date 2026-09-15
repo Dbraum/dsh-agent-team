@@ -26,8 +26,7 @@ import type {
   AgentTeamUpdateMemberRequest,
   AgentTeamViewRequest,
 } from '@wowyuarm/dsh-agent-team/types'
-import agentTeamRemote from '../../../agent-team/lib/typert.remote-client.js'
-import type {} from '../../../agent-team/lib/typert.remote-client.d.ts'
+import agentTeamRemote from '@wowyuarm/dsh-agent-team/remote'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
@@ -39,7 +38,7 @@ import { TeamNavigation } from './navigation.ts'
 import { TeamChangeStream, TeamReadStream, type TeamChangeListener, type TeamChangeScope } from './team-changes.ts'
 import { TeamDraftStore } from './drafts.ts'
 import { TeamFooterAction } from './TeamFooterAction.tsx'
-import { TeamSettings } from './TeamSettings.tsx'
+import { TeamMembersAction } from './TeamMembersAction.tsx'
 import { TeamConversation } from './TeamConversation.tsx'
 import { TeamWorkspaceBrowser } from './TeamWorkspaceBrowser.tsx'
 import { en, zh, type TeamKey } from './locales.ts'
@@ -246,13 +245,12 @@ function applyUi(ctx: ClientContext): void {
         navigation.actions().exitMemberSession()
         navigation.actions().leaveTeam()
       },
-      loadMemberGroups,
     }),
   }, TeamFooterAction as never))
 
   registerModeShadow(ctx, navigation, changes, reads, drafts, 'sidebar.workspaces', TeamWorkspaceBrowser as never)
   registerModeShadow(ctx, navigation, changes, reads, drafts, 'main', TeamConversation as never, undefined, 'conversation')
-  registerModeShadow(ctx, navigation, changes, reads, drafts, 'sidebar.settings', TeamSettings as never, () => ({ loadMemberGroups }))
+  registerModeShadow(ctx, navigation, changes, reads, drafts, 'sidebar.settings', TeamMembersAction as never, () => ({ loadMemberGroups }))
 }
 
 export async function apply(ctx: ClientContext): Promise<void> {

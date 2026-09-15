@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { IconUserOutline16, Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { TeamFooterProps } from './slots.ts'
+import type { TeamSettingsProps } from './slots.ts'
 import { TeamMemberRow } from './TeamMemberRow.tsx'
 import membersCss from './members.module.css'
 import css from './team.module.css'
 
-type TeamMembersActionProps = Pick<TeamFooterProps, 'wide' | 'loadMemberGroups' | 't'>
+type TeamMembersActionProps = Pick<TeamSettingsProps, 'wide' | 'loadMemberGroups' | 't'>
 
 export function TeamMembersAction({ wide, loadMemberGroups, t }: TeamMembersActionProps) {
   const [panelOpen, setPanelOpen] = useState(false)
