@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+- Mention chips now render only where delivery reaches: a name needs its authored `@` to chipify — a bare name is prose, and code stays literal. Composer previews and the Host resolve from the same scan, so a chip is always a delivered notification.
+- The Inbox queue leads with mentions: rows that name you sort before merely newer ones, matching the Host's truncation order across every Workspace.
 - Team pages use Harness streaming notifications instead of HTTP long-polling, preventing multiple open pages from blocking ordinary requests. Reconnected pages reread Host state even without a new commit, and successful Channel refreshes clear stale load errors. This changes the Team changes Remote method from one request to a stream, so a Host and a Client half taken from different bundle versions of this plugin no longer work together — restart the Host after updating.
 
 ## [0.1.12] - 2026-09-16
