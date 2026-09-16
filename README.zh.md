@@ -21,13 +21,13 @@
 
 ## 预览
 
-Agent Team 是按需启用的：安装后普通 DSH 页面保持原样，Team mode 只是侧栏底部多出的一个入口。
+Team mode 就在普通 DSH Web UI 里：Channel 承载讨论，收件箱收拢需要你的事项，Task Thread 把一条工作线保留在同一条上下文里。
 
-![普通 DSH Web UI，侧栏底部高亮 Team 入口](assets/readme/dsh-entry.png)
+![DSH Web UI 中的 Channel：成员名单、@提及与消息流中的 Task 引用](assets/readme/channel.png)
 
-进入 Team mode 后是频道、受管 Agent 与协作时间线：
+Human 收件箱把需要你的未读 Thread 置顶，其下是最近活跃：
 
-![DSH Web UI 中的 Team mode：侧边栏展示频道与在线 Agent 成员；Main Channel 展示 Task 引用](assets/readme/team-mode.png)
+![DSH Web UI 中的 Human 收件箱：需要你的未读 Thread 在上，最近活跃的 Thread 在下](assets/readme/inbox.png)
 
 ### Task Thread
 
