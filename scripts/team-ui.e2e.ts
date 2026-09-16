@@ -149,20 +149,34 @@ function readCountCapsule(element: Element): {
   readonly text: string
   readonly hidden: string | null
   readonly background: string
+  /** The used box, computed style is not enough: `min-width` is a floor the
+   * content can still push past, so whether one digit really lands in a square
+   * is only answered here. */
+  readonly box: Record<string, number>
+  /** The inset that reaches the digit: what a tone spends before the count can
+   * start, padding plus its own border. The two tones declare different numbers
+   * on purpose, so this — not the declaration — is what has to agree. */
+  readonly inset: number
   readonly shape: Record<string, string>
 } {
   const style = getComputedStyle(element)
+  const rect = element.getBoundingClientRect()
   return {
     text: element.textContent?.trim() ?? '',
     hidden: element.getAttribute('aria-hidden'),
     background: style.backgroundColor,
+    box: { width: rect.width, height: rect.height },
+    inset: Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.borderLeftWidth),
     shape: {
-      font: style.font,
+      // The longhands, because `font` is the empty string here and a shape that
+      // silently compares '' to '' would let a second font in unnoticed.
+      fontFamily: style.fontFamily,
+      fontSize: style.fontSize,
+      fontWeight: style.fontWeight,
       fontVariantNumeric: style.fontVariantNumeric,
       lineHeight: style.lineHeight,
       height: style.height,
       minWidth: style.minWidth,
-      padding: style.padding,
       boxSizing: style.boxSizing,
       display: style.display,
       alignItems: style.alignItems,
@@ -1624,7 +1638,14 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   // The expanded seat above is the side effect of the rail icon being a
   // destination; on a phone the ordinary reading state is the collapsed rail,
   // so the queue gets that face too — and there the row keeps its compact shape
-  // rather than the folded one the crushed seat forces.
+  // rather than the folded one the crushed seat forces. The card's current-page
+  // fill is read while it is still on screen, because the icon that replaces it
+  // has to wear exactly that.
+  const currentCardFill = await inboxCard.evaluate(card => ({
+    label: card.getAttribute('aria-current'),
+    background: getComputedStyle(card).backgroundColor,
+  }))
+  expect(currentCardFill.label).toBe('page')
   await page.getByRole('button', { name: '收起侧边栏' }).click()
   await page.locator('[data-sidebar-collapsed="true"]').waitFor()
   await settleLayout(page)
@@ -1635,6 +1656,16 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   })
   expect(collapsedRow.height).toBeLessThanOrEqual(62)
   expect(collapsedRow.sameLine).toBe(true)
+  // The rail has no label to say where the reader is, so the current page is the
+  // fill on the icon — the same `aria-current="page"` the wide card reads, and
+  // the same fill the card wears. One seat, one marker, at both widths.
+  const railCurrent = await railInboxButton.evaluate(button => ({
+    label: button.getAttribute('aria-current'),
+    background: getComputedStyle(button).backgroundColor,
+  }))
+  expect(railCurrent.label).toBe('page')
+  expect(railCurrent.background).toBe(currentCardFill.background)
+  expect(railCurrent.background).not.toBe('rgba(0, 0, 0, 0)')
   await page.screenshot({ path: join(UI07_SHOTS, 'inbox-page-narrow-collapsed.png'), fullPage: true })
   await railInboxButton.click()
   await page.locator('[data-sidebar-collapsed]').waitFor({ state: 'detached' })
@@ -1679,9 +1710,31 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   // sits cannot drift between them — which is exactly how the feed's copy ended
   // up on a different line box from the other two. The sidebar left this set: it
   // draws the mark asserted above rather than a count.
-  const queueShape = (await namedCapsule.evaluate(readCountCapsule)).shape
-  expect((await plainCapsule.evaluate(readCountCapsule)).shape).toEqual(queueShape)
-  expect(unreadCapsule?.shape).toEqual(queueShape)
+  const namedCapsuleRead = await namedCapsule.evaluate(readCountCapsule)
+  const plainCapsuleRead = await plainCapsule.evaluate(readCountCapsule)
+  const capsuleReads = [namedCapsuleRead, plainCapsuleRead, unreadCapsule]
+  for (const read of capsuleReads.slice(1)) {
+    if (read === null) continue
+    expect(read.shape).toEqual(namedCapsuleRead.shape)
+  }
+  // The two tones spend their inset differently on purpose — the hairline draws
+  // a 1px border where the fill has none, and pays for it out of the padding — so
+  // what has to agree is the inset that reaches the digit, not the declaration:
+  // 4px of padding behind a 1px border is the solid tone's 5px. Reading only the
+  // declaration would let the hairline capsule run a pixel wider than the fill
+  // beside it and still pass.
+  expect(capsuleReads.map(read => read?.inset))
+    .toEqual([namedCapsuleRead.inset, namedCapsuleRead.inset, namedCapsuleRead.inset])
+  for (const read of capsuleReads) {
+    // One character keeps the box square: the shared rule's 18px floor, not the
+    // digit's own advance, decides the width — which is what seats one digit in
+    // a circle instead of an oval. A wider count is allowed to widen the pill
+    // (`99+` is the widest), so the square is claimed only where the content is
+    // one character. This is read as a box rather than as a declaration because
+    // `min-width` is a floor the content can still push past.
+    if (read === null || read.text.length !== 1) continue
+    expect(read.box.height).toBe(read.box.width)
+  }
   const edgeLeft = async (locator: Locator): Promise<number> => Math.round(await locator.evaluate(element => element.getBoundingClientRect().x))
   const edgeRight = async (locator: Locator): Promise<number> => Math.round(await locator.evaluate(element => element.getBoundingClientRect().right))
   // One content column, measured rather than assumed: a Member circle hangs in
@@ -1705,9 +1758,11 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
         return {
           actor: left('[class*="rowActor"]', row),
           actorWidth: Math.round((actor.querySelector('[role="img"]') as HTMLElement).getBoundingClientRect().width),
+          actorLabel: (actor.querySelector('[role="img"]') as HTMLElement).getAttribute('aria-label'),
           badgeToTime: badge === null ? null : Math.round(box('time', row).left - badge.getBoundingClientRect().right),
           crumb: left('[class*="rowCrumb"]', row),
           preview: left('[class*="rowPreview"]', row),
+          text: (row.querySelector('[class*="rowPreview"]') as HTMLElement).textContent,
           // One Workspace on screen, so no row prints the name that never varies.
           workspace: row.querySelector('[class*="rowWorkspace"]') === null ? null : 1,
         }
@@ -1715,12 +1770,33 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
     }
   }))
   expect(column.length).toBeGreaterThan(0)
+  // The leading cluster is the Host's own roster, drawn: one 18px face per owner,
+  // —6px of overlap per neighbour, and the same again for a `+N` chip. The two
+  // names below are the Channel feed's own words, so 「谁在这个 Task 上」 reads the
+  // same on both surfaces; a Thread with no live owner falls back to whoever its
+  // newest fact came from, which is what the taskless rows above exercise.
+  const inboxNow = scaffold.ctx.agentTeam.inbox({ workspaceId: inboxWorkspace.id })
+  const hostRows = [...inboxNow.items, ...inboxNow.recent]
+  const clusterWidth = (owners: number): number => owners === 0 ? 18 : 18 + 12 * (Math.min(owners, 3) - 1) + (owners > 3 ? 12 : 0)
   for (const section of column) {
     for (const row of section.rows) {
+      const item = hostRows.find(candidate => (candidate.previewText ?? '') === row.text)
+      expect(item).toBeDefined()
+      expect(row.actorLabel).toBe(item!.claimOwners.length === 0
+        ? `最新来自 @${item!.newestActor.name}`
+        : `由 ${item!.claimOwners.map(owner => `@${owner.name}`).join(', ')} 处理`)
+      expect(row.actorWidth).toBe(clusterWidth(item!.claimOwners.length))
+      // The text column follows the cluster that is really drawn: a row pays one
+      // face's width per face it has and nothing for the stack it could have had.
+      // Reserving the widest stack is what used to put 36px of empty space in
+      // front of the identity on every single-face row.
+      expect(row.crumb).toBe(row.actor + row.actorWidth + 8)
       expect(row.preview).toBe(row.crumb)
-      expect(section.heading).toBe(row.crumb)
-      expect(row.actor).toBe(row.crumb - 26)
-      expect(row.actorWidth).toBe(18)
+      // The section heading is pinned to the one-face column — the row's own 8px
+      // inset plus one 18px face plus the line's 8px gap — which is the column
+      // every row without a stack opens on, so the section still reads as one
+      // block wherever a row is not actually carrying a stack.
+      expect(section.heading).toBe(row.actor + 26)
       if (row.badgeToTime !== null) expect(row.badgeToTime).toBe(8)
       expect(row.workspace).toBeNull()
     }
@@ -1791,6 +1867,88 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
   await expect.poll(async () => await plainRow.locator('[data-team-count-badge]').count()).toBe(0)
   await page.screenshot({ path: join(UI07_SHOTS, 'inbox-page-recent.png'), fullPage: true })
   await expect.poll(async () => await page.locator('button[class*="inboxCard"]').getAttribute('aria-current')).toBe('page')
+
+  // Both Threads above are taskless, so they only ever exercise the fallback: a
+  // row names whoever moved a Thread nobody claimed. A Task's row is the case the
+  // leading column is laid out for, and it leads with the same stack, the same
+  // rule, and the same words the Channel feed's Thread entry row leads with.
+  // Seeded here on real Host facts — a Task thread an Agent opens, plus the Claims
+  // its peers put on it — because a stack is the one thing a fake row could too
+  // easily fake. Every enabled Member still live in this Channel claims it, and the
+  // row is read against whatever roster the Host really has: this journey archives
+  // builder before it reaches the Inbox, and a peer cannot be provisioned here at
+  // all — a direct `agentTeam.addMember` call mounts no `team-member` preset in
+  // this lane (that call path resolves the shipped presets only, at boot as much as
+  // at the end), while the Client's own dialog provisions Members normally — so the
+  // count is asserted rather than assumed. The stack's geometry is what scales — one
+  // face or three, the row pays for exactly the faces it draws — and the multi-face
+  // shape itself is pinned in the Client component spec and the Host's claim-owner
+  // spec.
+  const stackStarted = await scaffold.ctx.agentTeam.sendMessageForAgent(inboxAgent, {
+    requestId: 'm2-09-stack-task' as never, workspaceId: inboxWorkspace.id, channelRef: deliveryChannel.channelRef,
+    asTask: true, body: '叠放校验：谁在这个 Task 上', recipients: [scaffold.ctx.agentTeam.status().humanMemberId],
+  })
+  if (stackStarted.kind !== 'committed') throw new Error(`stack fixture was rejected: ${stackStarted.kind}`)
+  const stackTaskRef = stackStarted.task!.taskRef
+  const stackThreadRef = stackStarted.thread.threadRef
+  // Only a Member of the Task's own Channel may claim it, so the roster to draw
+  // from is the Channel's, not the Workspace's.
+  const channelMemberIds = new Set(scaffold.ctx.agentTeam.view({ workspaceId: inboxWorkspace.id }).members
+    .filter((membership: { channelRef: string }) => membership.channelRef === deliveryChannel.channelRef)
+    .map((membership: { memberId: string }) => membership.memberId))
+  const claimants = scaffold.ctx.agentTeam.members()
+    .filter((entry: { member: { memberId: string; state: string; sessionId: string } }) => entry.member.state === 'enabled'
+      && channelMemberIds.has(entry.member.memberId)
+      && scaffold.ctx.agents.get(entry.member.sessionId as never) !== undefined)
+    .slice(0, 3)
+  // A Member of this Channel is live, so the Task has an owner to lead with rather
+  // than falling back to `newestActor` — which is the branch the two rows above
+  // already covered.
+  expect(claimants.length).toBeGreaterThanOrEqual(1)
+  for (const [index, entry] of claimants.entries()) {
+    const claimant = scaffold.ctx.agents.get(entry.member.sessionId as never)!
+    // A Claim is a Thread write, so the claimant drains its own unread first —
+    // the read that also hands back the revision the write is based on. The
+    // Claim itself is what makes the claimant a follower.
+    const read = await scaffold.ctx.agentTeam.readThreadForAgent(claimant, {
+      requestId: `m2-09-stack-read-${index}` as never, workspaceId: inboxWorkspace.id, taskRef: stackTaskRef,
+    })
+    const claimed = await scaffold.ctx.agentTeam.changeClaimForAgent(claimant, {
+      requestId: `m2-09-stack-claim-${index}` as never, workspaceId: inboxWorkspace.id, taskRef: stackTaskRef,
+      action: 'claim', direction: `叠放校验 ${index + 1}`, baseRevision: read.thread.revision,
+    })
+    if (claimed.kind !== 'committed') throw new Error(`stack Claim was rejected: ${claimed.kind}`)
+  }
+  const stackRow = page.locator('[data-team-inbox] button').filter({ hasText: '叠放校验：谁在这个 Task 上' })
+  await expect.poll(async () => await stackRow.count(), { timeout: 30_000 }).toBe(1)
+  // The cluster is the Host's own roster made pixels: one face per owner, in
+  // claim order, under the same words the Channel feed uses — and the row around
+  // it pays for exactly those faces, so the widest stack costs the rows that
+  // carry one and no row a pixel more.
+  const stackBox = await stackRow.evaluate(row => {
+    const cluster = row.querySelector('[class*="rowActor"] [role="img"]') as HTMLElement
+    const gutter = row.querySelector('[class*="rowActor"]') as HTMLElement
+    const crumb = row.querySelector('[class*="rowCrumb"]') as HTMLElement
+    return {
+      label: cluster.getAttribute('aria-label'),
+      width: Math.round(cluster.getBoundingClientRect().width),
+      circles: cluster.querySelectorAll('span').length,
+      // The faces the row really has, then the line's own 8px gap.
+      inset: Math.round(crumb.getBoundingClientRect().left - gutter.getBoundingClientRect().left),
+    }
+  })
+  const stackItem = scaffold.ctx.agentTeam.inbox({ workspaceId: inboxWorkspace.id }).items
+    .find(item => item.thread.threadRef === stackThreadRef)!
+  // Every claimant the Host accepted is an owner on the row, and the row paid one
+  // face per owner rather than the width of the stack it could have carried.
+  expect(stackItem.claimOwners.length).toBe(claimants.length)
+  expect(stackItem.claimOwners.map(owner => owner.name).sort()).toEqual(
+    claimants.map((entry: { member: { handle: string } }) => entry.member.handle).sort())
+  expect(stackBox.circles).toBe(Math.min(stackItem.claimOwners.length, 3) + (stackItem.claimOwners.length > 3 ? 1 : 0))
+  expect(stackBox.label).toBe(`由 ${stackItem.claimOwners.map(owner => `@${owner.name}`).join(', ')} 处理`)
+  expect(stackBox.width).toBe(clusterWidth(stackItem.claimOwners.length))
+  expect(stackBox.inset).toBe(stackBox.width + 8)
+  await page.screenshot({ path: join(UI07_SHOTS, 'inbox-row-owners-desktop.png'), fullPage: true })
 
   // Losing the Host connection surfaces the failure in two places, and both
   // must read as states rather than as drift: the Channel body centers in the

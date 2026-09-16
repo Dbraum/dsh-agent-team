@@ -26,6 +26,9 @@ function inboxRow(workspaceId: string, threadRef: string, overrides: Record<stri
     // The Host resolves who the row's instant came from, so a row never needs a
     // Member view of its own to name them.
     newestActor: { memberId: 'member:iris', name: 'iris' },
+    // Nor a roster to draw a Task's live owners: the Host resolves those too, and
+    // an Inbox row leads with them the same way the Channel feed's entry does.
+    claimOwners: [],
     ...overrides,
   }
 }
@@ -157,6 +160,39 @@ describe('Team Inbox surfaces', () => {
     expect(b.view.getByText('3 个 Thread')).toBeTruthy()
     expect(b.view.getByText('155 条未读')).toBeTruthy()
     expect(b.view.getByText('4 条提及')).toBeTruthy()
+    await b.runtime.dispose()
+  })
+
+  it('leads a row with the Task\'s live owners in the Channel feed\'s own words, and with its newest actor when there are none', async () => {
+    const b = await runtimeWithTeam({ mode: 'team', workspaceId: 'w1' })
+    const card = await b.view.findByRole('button', { name: '收件箱' })
+    const rows = [
+      inboxRow('w1', 'thread:owned', { previewText: 'owner stack row', claimOwners: [
+        { memberId: 'member:reviewer', name: 'reviewer' },
+        { memberId: 'member:builder', name: 'builder' },
+      ] }),
+      inboxRow('w1', 'thread:taskless', { channelName: 'delivery', previewText: 'taskless row', task: undefined, taskNumber: undefined }),
+      // The tail answers 「谁在这个 Task 上」 exactly as the queue does: which cluster
+      // a row leads with is the Thread's own fact, never the section's, or a
+      // Thread would change shape on its way from the queue into the tail.
+      inboxRow('w1', 'thread:read', { channelName: 'general', previewText: 'read tail row', directCount: 0, unreadCount: 0, newestSequence: 2,
+        claimOwners: [{ memberId: 'member:vera', name: 'vera' }] }),
+    ]
+    b.seedInbox(rows)
+    b.seedInbox(rows)
+    await waitForEntryUnread(card, 2)
+    fireEvent.click(card)
+    // One language for 「谁在这个 Task 上」 across both surfaces: the same stack, the
+    // same rule, and the same words the Channel feed's Thread entry row uses.
+    const owned = await b.view.findByRole('button', { name: /owner stack row/ })
+    expect(owned.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('由 @reviewer, @builder 处理')
+    expect(owned.querySelectorAll('[role="img"] > span')).toHaveLength(2)
+    // A Thread nobody has claimed has no roster to lead with, so the row falls
+    // back to the one person it can always name: whoever moved it last.
+    const taskless = b.view.getByRole('button', { name: /taskless row/ })
+    expect(taskless.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('最新来自 @iris')
+    const tail = b.view.getByRole('button', { name: /read tail row/ })
+    expect(tail.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('由 @vera 处理')
     await b.runtime.dispose()
   })
 

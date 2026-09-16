@@ -169,17 +169,17 @@ export function TeamInboxPage({ useWorkspaces, loadInbox, subscribeChanges, sele
 }
 
 /**
- * One queue row, shaped like the shipped two-line result row: the person the
- * row's instant came from leads in the gutter, the identity line answers which
- * Thread this is, how much is waiting, and when it last moved, and the gist sits
- * under it on the same column as evidence for that identity rather than as the
- * row's subject.
+ * One queue row, shaped like the shipped two-line result row: who is on this
+ * Thread leads in the gutter, the identity line answers which Thread this is,
+ * how much is waiting, and when it last moved, and the gist sits under it on the
+ * same column as evidence for that identity rather than as the row's subject.
  *
- * The gutter carries the one thing every row has — who moved it — so a Thread
- * that merely arrived and one that named the reader open on the same edge
- * instead of the quieter one opening on a slot reserved for a count it does not
- * hold. It is the grammar the Channel feed's Thread entry row already speaks,
- * where the people on the work lead the row.
+ * The gutter carries the one thing every row has — who is on the work, or who
+ * moved a Thread nobody has claimed — so a Thread that merely arrived and one
+ * that named the reader open on the same edge instead of the quieter one opening
+ * on a slot reserved for a count it does not hold. It is the grammar the Channel
+ * feed's Thread entry row already speaks, where the people on the work lead the
+ * row.
  *
  * Before the queue admitted every unread Thread, each row was a mention and the
  * rows were interchangeable; now that named and ambient unread share one list,
@@ -198,19 +198,28 @@ function InboxQueueRow({ row, t, showWorkspace, onOpen }: {
 }) {
   const { item } = row
   const actor = item.newestActor
+  const owners = item.claimOwners
   const named = item.directCount > 0
   const countLabel = named
     ? t('inboxRowUnreadMentions', { count: item.unreadCount, mentions: item.directCount })
     : t('inboxRowUnread', { count: item.unreadCount })
   return <button type="button" className={inboxCss.row} data-named={named || undefined} onClick={onOpen}>
-    {/* Who moved this Thread leads every row, in the slot the count used to
-        reserve: the circle is there whether or not anything is waiting, so a row
-        never opens on empty space and the one column the reader scans down
-        answers 「谁」 before it answers anything else. The stack's own label is
-        what joins the control's accessible name — the avatar is presentational,
+    {/* Who is on this Thread leads every row, in the slot the count used to
+        reserve: the cluster is there whatever the row holds, so a row never
+        opens on empty space and the one column the reader scans down answers
+        「谁」 before it answers anything else. A Task's live owners answer it
+        wherever there are any — the same stack, the same rule, and the same
+        words the Channel feed's Thread entry row leads with — and a Thread with
+        no live owner falls back to the person its newest fact came from, since
+        that is all anybody knows about it. Which of the two a row shows is the
+        Thread's own fact, never the section's: a Thread must not change shape on
+        its way from the queue into the 「最近活跃」 tail. The stack's own label is
+        what joins the control's accessible name — the avatars are presentational,
         the row's visible text is the Thread, not the queue. */}
     <span className={inboxCss.rowActor}>
-      <TeamAvatarStack owners={[{ memberId: actor.memberId, name: actor.name }]} label={t('inboxRowActor', { name: `@${actor.name}` })} />
+      {owners.length > 0
+        ? <TeamAvatarStack owners={owners} label={t('claimers', { names: owners.map(owner => `@${owner.name}`).join(', ') })} />
+        : <TeamAvatarStack owners={[actor]} label={t('inboxRowActor', { name: `@${actor.name}` })} />}
     </span>
     <span className={inboxCss.rowLine}>
       <span className={inboxCss.rowCrumb}>

@@ -561,6 +561,15 @@ export interface AgentTeamInboxItem {
    * fact is committed by exactly one actor, so a row always names one.
    */
   readonly newestActor: AgentTeamInboxActor
+  /**
+   * The people still on this Thread's Task: owners of its live Claims, in claim
+   * order, deduped — the same rule, and the same words, the Channel feed's Thread
+   * entry row already uses for the same Task. Resolved here because a row draws
+   * handles and has no Member view of its own to turn ids into them. Empty on a
+   * taskless Thread, and on a done or closed one, whose Claims are history that
+   * the state word already tells.
+   */
+  readonly claimOwners: readonly AgentTeamInboxActor[]
   readonly attention?: AgentTeamThreadAttention
 }
 

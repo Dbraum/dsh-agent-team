@@ -1422,7 +1422,8 @@ export class AgentTeamLedger {
         unreadCount: unread.length, directCount,
         previewText: boundedInboxPreview(this.threadAnchor(thread.threadRef).body),
         newestSequence: newest.sequence, newestOccurredAt: newest.occurredAt,
-        newestActor: this.inboxActorFor(newest), ...(attention === undefined ? {} : { attention }) }))
+        newestActor: this.inboxActorFor(newest), claimOwners: this.liveClaimOwners(task),
+        ...(attention === undefined ? {} : { attention }) }))
     }
     items.sort((left, right) => right.directCount - left.directCount || right.newestSequence - left.newestSequence || left.thread.threadRef.localeCompare(right.thread.threadRef))
     const selected = items.slice(0, limit)
@@ -1442,8 +1443,29 @@ export class AgentTeamLedger {
    * themselves through their raw id rather than as nobody.
    */
   private inboxActorFor(fact: AgentTeamThreadFact): AgentTeamInboxActor {
-    const memberId = fact.kind === 'message' ? fact.message.sender : fact.activity.actor
+    return this.memberActor(fact.kind === 'message' ? fact.message.sender : fact.activity.actor)
+  }
+
+  /** One Member as a row draws them: the id carries the identity hue, the handle the initial. */
+  private memberActor(memberId: AgentTeamMemberId): AgentTeamInboxActor {
     return Object.freeze({ memberId, name: this.state.members.get(memberId)?.handle ?? memberId })
+  }
+
+  /**
+   * The people a Task still has on it, resolved the way a row draws them: owners
+   * of its live Claims, in claim order, deduped. A released Claim is not work,
+   * and a done or closed Task keeps its Claims as history rather than as
+   * presence — deliberately the same rule the Channel feed applies to the same
+   * Task, so 「谁在这个 Task 上」 never acquires a second definition.
+   */
+  private liveClaimOwners(task: AgentTeamTask | undefined): readonly AgentTeamInboxActor[] {
+    if (task === undefined || (task.status !== 'in_progress' && task.status !== 'in_review')) return Object.freeze([] as AgentTeamInboxActor[])
+    const owners: AgentTeamMemberId[] = []
+    for (const claim of this.claimsForTask(task.taskRef)) {
+      if (claim.state === 'released' || owners.includes(claim.owner)) continue
+      owners.push(claim.owner)
+    }
+    return Object.freeze(owners.map(owner => this.memberActor(owner)))
   }
 
   /**
@@ -1483,7 +1505,7 @@ export class AgentTeamLedger {
         unreadCount: 0, directCount: 0,
         previewText: boundedInboxPreview(this.threadAnchor(thread.threadRef).body),
         newestSequence: newest.sequence, newestOccurredAt: newest.occurredAt,
-        newestActor: this.inboxActorFor(newest) }))
+        newestActor: this.inboxActorFor(newest), claimOwners: this.liveClaimOwners(task) }))
     }
     recent.sort((left, right) => right.newestSequence - left.newestSequence || left.thread.threadRef.localeCompare(right.thread.threadRef))
     return Object.freeze(recent.slice(0, RECENT_INBOX_LIMIT))

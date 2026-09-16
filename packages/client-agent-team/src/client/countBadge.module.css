@@ -29,9 +29,15 @@
   padding: 0 5px;
 }
 
-/* The same geometry in the other ink: unread that merely arrived. */
+/* The same geometry in the other ink: unread that merely arrived. The border is
+   paid for out of the padding — 1px + 4px is the solid tone's 5px — so both
+   tones keep one border box. Keeping the padding at 5px instead lets the 1px
+   border push the box past the 18px floor: a one-digit hairline reads 18.125px
+   wide rather than 18, and a two-digit one ends up 2px wider than the solid
+   capsule beside it. */
 .hairline {
   background: transparent;
   border: 1px solid var(--dsw-alias-border-l2);
   color: var(--dsw-alias-label-secondary);
+  padding: 0 4px;
 }

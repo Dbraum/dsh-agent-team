@@ -22,6 +22,7 @@
 }
 .railButton:hover,
 .railButton:focus-visible {
+  --team-mark-ring: var(--dsw-alias-interactive-bg-hover);
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
 }
@@ -118,6 +119,8 @@
 .inboxCard:hover,
 .inboxCard:focus-visible,
 .inboxCard[aria-current='page'] {
+  /* The mark on the card cuts itself out of the card, not out of the page. */
+  --team-mark-ring: var(--dsw-alias-interactive-bg-hover);
   background: var(--dsw-alias-interactive-bg-hover);
 }
 .inboxCard:focus-visible {
@@ -148,11 +151,12 @@
 /* Everything the sidebar still says about unread: the solid ink the queue uses
    for a Thread that named the reader, at the size of a mark instead of a count.
    The ring is the surface's own background, so the dot reads as a mark laid over
-   the icon's strokes rather than one blending into them. */
+   the icon's strokes rather than one blending into them — and it follows the
+   card's hovered and current-page fills, which are not the page background. */
 .inboxDot {
   background: var(--dsw-alias-state-business-primary);
   border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--dsw-alias-bg-base);
+  box-shadow: 0 0 0 2px var(--team-mark-ring, var(--dsw-alias-bg-base));
   corner-shape: round;
   height: 8px;
   left: -2px;
@@ -174,7 +178,13 @@
   position: relative;
   width: 36px;
 }
-.railButton[data-active] {
+/* The rail's own current-page marker: the icon-only rail reads the same
+   `aria-current="page"` the wide card does, and while the Inbox is the page on
+   screen its icon wears the card's own fill — which is also the surface its
+   unread dot has to cut itself out of. The rail carries no label, so this fill
+   is the only thing that says where the reader is. */
+.railButton[aria-current='page'] {
+  --team-mark-ring: var(--dsw-alias-interactive-bg-hover);
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
 }

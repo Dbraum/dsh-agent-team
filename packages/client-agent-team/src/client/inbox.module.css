@@ -41,13 +41,19 @@
   cursor: pointer;
   display: grid;
   font: inherit;
-  /* 26px of gutter — the 18px leading marker plus the line's own 8px gap. The
-     section heading is inset by the same 34px, so heading, identity, and gist
-     read down one column instead of three. 8px is also the shipped sidebar-row
-     inset; it nearly cancels the reserved scrollbar gutter that shifts this
-     column half a scrollbar left of the header band, leaving the row text within
-     a few pixels of the header's. */
-  grid-template-columns: 18px minmax(0, 1fr);
+  /* The leading cluster takes the width it actually draws — one 18px face on
+     most rows — and the line's own 8px gap follows it, so a row pays only for
+     the faces it has. Reserving the widest stack on every row instead buys a
+     still content edge with 36px of empty space in front of the identity on
+     every Thread that carries one owner, which is most of them; a row that does
+     carry a stack opens its text a face further right and nothing else moves.
+     The section heading is inset to the one-face column (34px), which is the
+     same column every single-face row opens on, so heading, identity, and gist
+     still read down one column wherever the stack is not. 8px is also the
+     shipped sidebar-row inset; it nearly cancels the reserved scrollbar gutter
+     that shifts this column half a scrollbar left of the header band, leaving
+     the row text within a few pixels of the header's. */
+  grid-template-columns: max-content minmax(0, 1fr);
   padding: 8px;
   row-gap: 1px;
   text-align: left;
@@ -55,6 +61,9 @@
 }
 .row:hover,
 .row:focus-visible {
+  /* On this state the row is no longer the page background, so the marks it
+     carries must cut themselves out of the surface they are actually on. */
+  --team-mark-ring: var(--dsw-alias-interactive-bg-hover);
   background: var(--dsw-alias-interactive-bg-hover);
 }
 .row:focus-visible {
@@ -62,11 +71,14 @@
   outline-offset: -2px;
 }
 
-/* The leading slot, first line: the person this Thread's newest fact came from.
-   Every row fills it, which is the point — a slot reserved for a count sits empty
-   on every Thread with nothing waiting, and the row then opens on blank space
+/* The leading slot, first line: who is on this Thread — the Task's live owners
+   where it has any, the person its newest fact came from otherwise. Every row
+   fills the slot, which is the point — a slot reserved for a count sits empty on
+   every Thread with nothing waiting, and the row then opens on blank space
    instead of on the one thing it always knows. It is the same Member identity
-   language the Channel feed's Thread entry row leads with. */
+   language the Channel feed's Thread entry row leads with, and it takes only the
+   width it draws, so the row's content edge follows the cluster rather than
+   reserving room for the widest one it could ever hold. */
 .rowActor {
   display: flex;
   grid-column: 1;
@@ -172,9 +184,12 @@
   font-weight: 600;
   line-height: 18px;
   margin: 0 0 4px;
-  /* The heading opens on the rows' own content column rather than beside the
+  /* The heading opens on the column every single-face row opens on — the row's
+     8px inset, one 18px face, and the line's 8px gap — rather than beside the
      gutter, so the section reads as one block and the count capsule keeps the
-     margin to itself. */
+     margin to itself. It is the column the reader scans down: only a row that
+     actually carries a stack opens further right than its own section's
+     heading. */
   padding: 0 8px 0 34px;
 }
 /* How much the section holds, so a reader never counts rows to find out — and

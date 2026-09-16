@@ -245,6 +245,73 @@ describe('discovery projections hang off the same per-fact source', () => {
     expect(item.newestOccurredAt).toBe(newestUnread!.fact.occurredAt)
   })
 
+  it('the Inbox row carries the Task\'s live owners, and no owner once the work is gone', async () => {
+    const { ledger, actor, taskRef } = await seededThread()
+    const claimed = ledger.inbox(actor, { workspaceId: alpha }).items[0]!
+    // The row answers 「谁在这个 Task 上」 with the ledger's own rule — the same one
+    // the Channel feed applies — resolved to handles here, because an Inbox row
+    // has no Member roster of its own to turn ids into them.
+    expect(claimed.claimOwners).toEqual([{ memberId: actor.memberId, name: actor.handle }])
+    // The claimant drains its own unread before writing, and a released Claim is
+    // no longer work: the Task drops back to unclaimed, and the row stops naming
+    // owners the moment there are none rather than keeping a stale roster.
+    const drained = (await ledger.readThread({ requestId: requestId('owner-read'), workspaceId: alpha, taskRef, actor })).value
+    const claim = ledger.listClaims(actor, { workspaceId: alpha, taskRef }).claims[0]!
+    committed((await ledger.changeClaim({ requestId: requestId('owner-release'), workspaceId: alpha, taskRef,
+      action: 'release', claimRef: claim.claimRef, baseRevision: drained.readThroughSequence, actor })).value)
+    const humanItem = ledger.inbox(agentTeamHumanActor(), { workspaceId: alpha }).items
+      .find(item => item.task?.taskRef === taskRef)!
+    expect(humanItem.task?.status).toBe('todo')
+    expect(humanItem.claimOwners).toEqual([])
+  })
+
+  it('names every live Claim owner in claim order, and only those still on the Task', async () => {
+    const { ledger, actor, taskRef } = await seededThread()
+    const channelRef = ledger.inbox(actor, { workspaceId: alpha }).items[0]!.channelRef
+    const { actor: second } = await addLedgerMember(ledger, channelRef)
+    const secondRead = (await ledger.readThread({ requestId: requestId('second-read'), workspaceId: alpha, taskRef, actor: second })).value
+    committed((await ledger.changeClaim({ requestId: requestId('second-claim'), workspaceId: alpha, taskRef,
+      action: 'claim', direction: 'second direction', baseRevision: secondRead.thread.revision, actor: second })).value)
+    // The Human reads the row here on purpose: a Member's queue is exactly their
+    // unread, so the claimant's own row would be gone once it drained — and the
+    // roster rule is a fact about the Thread, not about one reader's unread.
+    const ownerRow = () => {
+      const view = ledger.inbox(agentTeamHumanActor(), { workspaceId: alpha })
+      return [...view.items, ...view.recent].find(item => item.task?.taskRef === taskRef)!
+    }
+    // A second Claim is a second face, and the roster is ordered by claim, not by
+    // whichever Member the ledger happens to hold first.
+    expect(ownerRow().claimOwners).toEqual([
+      { memberId: actor.memberId, name: actor.handle },
+      { memberId: second.memberId, name: second.handle },
+    ])
+    // One owner leaving does not empty the row: the Claim still standing is what
+    // the row names, so a released Claim drops out and the others stay.
+    const drained = (await ledger.readThread({ requestId: requestId('owner-read-pair'), workspaceId: alpha, taskRef, actor })).value
+    const ownClaim = ledger.listClaims(actor, { workspaceId: alpha, taskRef }).claims
+      .find(claim => claim.owner === actor.memberId)!
+    committed((await ledger.changeClaim({ requestId: requestId('owner-release-pair'), workspaceId: alpha, taskRef,
+      action: 'release', claimRef: ownClaim.claimRef, baseRevision: drained.readThroughSequence, actor })).value)
+    expect(ownerRow().claimOwners).toEqual([{ memberId: second.memberId, name: second.handle }])
+  })
+
+  it('a taskless Thread names no owners at all', async () => {
+    const { ledger, actor } = await seededThread()
+    const channelRef = ledger.inbox(actor, { workspaceId: alpha }).items[0]!.channelRef
+    // The claimant opens a discussion of its own — writing a Thread's anchor is
+    // what follows it — and the Human's answer is what puts that Thread in the
+    // claimant's own Inbox.
+    const started = committed((await ledger.sendMessage({ requestId: requestId('taskless'), workspaceId: alpha, channelRef,
+      asTask: false, body: 'A discussion nobody claimed', actor })).value)
+    committed((await ledger.reply({ requestId: requestId('taskless-reply'), workspaceId: alpha, threadRef: started.thread.threadRef,
+      body: 'An answer', baseRevision: started.thread.revision, actor: agentTeamHumanActor() })).value)
+    const items = ledger.inbox(actor, { workspaceId: alpha }).items
+    expect(items).toHaveLength(2)
+    const taskless = items.find(item => item.thread.threadRef === started.thread.threadRef)!
+    expect(taskless.task).toBeUndefined()
+    expect(taskless.claimOwners).toEqual([])
+  })
+
   it('view lastActivityAt is the tail fact instant of each Thread', async () => {
     const { ledger, actor } = await seededThread()
     // The view runs on the ledger that owns the projection state — the one
