@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and Semantic Versioning. Team bundle versions evolve independently of DeepSeek Harness versions; DeepSeek Harness compatibility is expressed through `peerDependencies` and [`docs/dsh-release-compatibility.md`](docs/dsh-release-compatibility.md).
 
+## [Unreleased]
+
+- Team pages use Harness streaming notifications instead of HTTP long-polling, preventing multiple open pages from blocking ordinary requests. Reconnected pages reread Host state even without a new commit, and successful Channel refreshes clear stale load errors.
+
 ## [0.1.12] - 2026-09-16
 
 - Reworked Inbox around unread and recent activity: the unread queue leads with counts, and threads you keep returning to get their own list.
