@@ -74,7 +74,7 @@ describe('Team Member private memory composition', () => {
     expect(first.kind === 'enter' && first.messages.at(-1)?.content[0]).not.toEqual(expect.objectContaining({ text: expect.stringContaining('Team Workspace participation') }))
     workspaces.push({ workspaceId: 'workspace:other', path: join(root, 'other'), default: false })
     const joined = await preStep(ctx, agent)
-    expect(joined.kind === 'enter' && joined.messages.at(-1)?.content[0]).toEqual(expect.objectContaining({ text: expect.stringContaining(join(root, 'other', 'AGENTS.md')) }))
+    expect(joined.kind === 'enter' && joined.messages.at(-1)?.content[0]).toEqual(expect.objectContaining({ text: expect.stringContaining(JSON.stringify(join(root, 'other', 'AGENTS.md')).slice(1, -1)) }))
     expect(joined.kind === 'enter' && joined.messages.at(-1)?.content[0]).toEqual(expect.objectContaining({ text: expect.stringContaining('absolute paths') }))
     workspaces.pop()
     const left = await preStep(ctx, agent)
