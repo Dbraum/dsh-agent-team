@@ -1503,8 +1503,12 @@ export class AgentTeamLedger {
       if (thread === undefined) continue
       const channelRef = this.channelRefForThread(thread.threadRef)
       if (channelRef === undefined) continue
-      const workspaceId = this.state.channels.get(channelRef)?.workspaceId
-      if (workspaceId === undefined || !workspaceIds.includes(workspaceId)) continue
+      const channel = this.state.channels.get(channelRef)
+      if (channel === undefined || !workspaceIds.includes(channel.workspaceId)) continue
+      // Archived Channels do not exist on Team API surfaces: their Threads
+      // reach neither Inbox slice, matching ref resolution and the feed.
+      if (channel.state === 'archived') continue
+      const workspaceId = channel.workspaceId
       if (authorized.kind === 'member' && !this.isChannelMember(channelRef, authorized.memberId)) continue
       const unread = this.unreadFor(authorized.memberId, thread.threadRef)
       if (unread.length === 0) continue
@@ -1594,7 +1598,11 @@ export class AgentTeamLedger {
       if (thread === undefined) continue
       const channelRef = this.channelRefForThread(thread.threadRef)
       if (channelRef === undefined) continue
-      if (this.state.channels.get(channelRef)?.workspaceId !== workspaceId) continue
+      const channel = this.state.channels.get(channelRef)
+      if (channel === undefined || channel.workspaceId !== workspaceId) continue
+      // Archived Channels do not exist on Team API surfaces, so their Threads
+      // are no way back into work either — participation ends at archival.
+      if (channel.state === 'archived') continue
       const facts = this.state.factsByThread.get(thread.threadRef) ?? []
       const newest = facts.at(-1)
       if (newest === undefined) continue

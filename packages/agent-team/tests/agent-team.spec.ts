@@ -1892,6 +1892,28 @@ describe('AgentTeam archived read surfaces', () => {
     expect(cold.getTask(started.task.taskRef)).toMatchObject({ taskRef: started.task.taskRef })
     expect(cold.resolveTaskRefs(alpha, [started.task.taskRef])).toEqual([])
   })
+
+  it('excludes archived-Channel Threads from every Inbox slice', async () => {
+    const test = await harness()
+    const channel = await test.ctx.agentTeam.createChannel({ requestId: requestId('inbox-channel'), workspaceId: alpha, name: 'engineering', description: 'Engineering work' })
+    const started = withTask(committed(await test.ctx.agentTeam.sendMessage({ asTask: true, requestId: requestId('inbox-start'), workspaceId: alpha, channelRef: channel.channel.channelRef, body: 'Task' })))
+    const ledger = replayLedger(test)
+    const { actor } = await addLedgerMember(ledger, channel.channel.channelRef)
+    await ledger.readThread({ requestId: requestId('inbox-read'), workspaceId: alpha, taskRef: started.task.taskRef, actor: agentTeamHumanActor() })
+    // Pre-archival the participated Thread is the Human recent tail's.
+    expect(ledger.inbox(agentTeamHumanActor(), { workspaceId: alpha })).toMatchObject({ items: [],
+      recent: [expect.objectContaining({ thread: expect.objectContaining({ threadRef: started.thread.threadRef }) })] })
+
+    await ledger.archiveChannel({ requestId: requestId('inbox-archive'), workspaceId: alpha, channelRef: channel.channel.channelRef, actor: agentTeamHumanActor() })
+
+    // Archived Channels do not exist on Team API surfaces: neither the unread
+    // queue nor the Human recent tail names their Threads, for the Human or
+    // for a Member, and the picture survives a cold restart.
+    expect(ledger.inbox(agentTeamHumanActor(), { workspaceId: alpha })).toEqual({ items: [], recent: [], totalUnreadCount: 0, totalDirectCount: 0 })
+    expect(ledger.inbox(actor, { workspaceId: alpha })).toEqual({ items: [], recent: [], totalUnreadCount: 0, totalDirectCount: 0 })
+    expect(ledger.memberInbox(actor, {})).toEqual({ items: [], recent: [], totalUnreadCount: 0, totalDirectCount: 0 })
+    expect(replayLedger(test).inbox(agentTeamHumanActor(), { workspaceId: alpha })).toEqual({ items: [], recent: [], totalUnreadCount: 0, totalDirectCount: 0 })
+  })
 })
 
 describe('AgentTeam Member session rollover ledger command', () => {
