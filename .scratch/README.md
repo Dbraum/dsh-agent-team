@@ -17,7 +17,6 @@
 
 本节只列尚未结束的工作项；已结束的见 `archive/YYYY-MM/`。
 
-- [全局 Agent 成员与 Workspace 参与](active/global-agent-architecture/README.md)：Member 全局身份与 Workspace 参与关系；三张 ticket 已实施，代码在 PR #26（`feat/global-agent-pr`，未合并）。
 - [Member Session 架构](active/member-session-architecture/README.md)：统一读取 seam、历史召回与安全回返；spec 已定稿，ticket 03 为当前 frontier。
 
 ## 临时材料和 UI 证据
