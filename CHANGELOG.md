@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
-- Team pages use Harness streaming notifications instead of HTTP long-polling, preventing multiple open pages from blocking ordinary requests. Reconnected pages reread Host state even without a new commit, and successful Channel refreshes clear stale load errors.
+- Team pages use Harness streaming notifications instead of HTTP long-polling, preventing multiple open pages from blocking ordinary requests. Reconnected pages reread Host state even without a new commit, and successful Channel refreshes clear stale load errors. This changes the Team changes Remote method from one request to a stream, so a Host and a Client half taken from different bundle versions of this plugin no longer work together — restart the Host after updating.
 
 ## [0.1.12] - 2026-09-16
 

@@ -1,3 +1,4 @@
+import { RemoteStreamCarrierError } from '@deepseek-ai/dsh-api-gateway/client'
 import type { ClientRemote, RemoteStream } from '@deepseek-ai/dsh-api-gateway/client'
 import type {} from '@wowyuarm/dsh-agent-team/remote'
 import type { AgentTeamChangeScope, AgentTeamChangesResult } from '@wowyuarm/dsh-agent-team/types'
@@ -19,6 +20,7 @@ function scopeKey(scope: TeamChangeScope): string {
 }
 
 interface ScopeSubscription {
+  readonly scope: TeamChangeScope
   readonly stream: RemoteStream<AgentTeamChangesResult>
   readonly listeners: Set<TeamChangeListener>
   failure: string | undefined
@@ -34,13 +36,7 @@ export class TeamChangeStream {
     const key = scopeKey(scope)
     let subscription = this.subscriptions.get(key)
     if (subscription === undefined) {
-      const stream = this.remote.$stream({
-        name: `Team changes ${key}`,
-        open: signal => this.remote.agentTeam.changes(scope === undefined ? {} : { scope }, signal),
-        ended: () => new Error('Team change subscription ended'),
-        carrierFailed: error => this.fail(key, error.message),
-      })
-      subscription = { stream, listeners: new Set([listener]), failure: undefined }
+      subscription = this.open(scope, new Set([listener]))
       this.subscriptions.set(key, subscription)
       void this.run(key, subscription)
     } else {
@@ -53,6 +49,41 @@ export class TeamChangeStream {
       if (this.subscriptions.get(key) === owned) this.subscriptions.delete(key)
       void owned.stream.dispose()
     }
+  }
+
+  /**
+   * Reopen every scope whose stream already ended for good. The Harness resumes a
+   * live generation across reconnects, but a terminated one is gone for good: a new
+   * Host generation is the moment the scope was waiting for can come back, and the
+   * listeners keep their seats, so only the stream is replaced.
+   */
+  recover(): void {
+    // Replacing an existing key's value is safe during Map iteration: the entry keeps
+    // its place, and a scope that never failed is left untouched.
+    for (const [key, subscription] of this.subscriptions) {
+      if (subscription.failure === undefined) continue
+      const replacement = this.open(subscription.scope, subscription.listeners)
+      this.subscriptions.set(key, replacement)
+      void subscription.stream.dispose()
+      void this.run(key, replacement)
+    }
+  }
+
+  private open(scope: TeamChangeScope, listeners: Set<TeamChangeListener>): ScopeSubscription {
+    const key = scopeKey(scope)
+    const stream = this.remote.$stream({
+      name: `Team changes ${key}`,
+      open: signal => this.remote.agentTeam.changes(scope === undefined ? {} : { scope }, signal),
+      // A normal end after the baseline is an outage, not a verdict: the Harness
+      // retries a carrier loss and reports it through `carrierFailed`, while every
+      // other error stays terminal. Only an end before the opening baseline is a
+      // protocol violation — this stream never yields nothing before it ends.
+      ended: accepted => accepted
+        ? new RemoteStreamCarrierError('Team change subscription ended without a terminal result')
+        : new Error('Team change subscription ended before its opening baseline'),
+      carrierFailed: error => this.fail(key, error.message),
+    })
+    return { scope, stream, listeners, failure: undefined }
   }
 
   async dispose(): Promise<void> {

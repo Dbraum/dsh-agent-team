@@ -210,6 +210,10 @@ describe('Agent Team shipping contract', () => {
     expect(manifest.dependencies).toEqual({ '@deepseek-ai/dsh-storage-sqlite': '>=0.1.5-rc.1 <0.2.0', zod: '^4.4.3' })
     expect(bundleManifest.dsh.client).toEqual({
       platform: 'web',
+      // The Client half classifies a stream end with the Gateway's carrier-error
+      // class, so the module table has to answer for that request: the bundle
+      // purity gate rejects the value import without this row.
+      external: ['@deepseek-ai/dsh-api-gateway/client'],
       inject: expect.not.arrayContaining(['@wowyuarm/dsh-agent-team/host']),
     })
     // An ordering hint for a package DSH no longer publishes is dead weight in
