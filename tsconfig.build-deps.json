@@ -38,6 +38,9 @@
       "@wowyuarm/dsh-agent-team/preset-roster": [
         "./packages/agent-team/lib/types/preset-roster.d.ts"
       ],
+      "@wowyuarm/dsh-agent-team/sqlite-backend": [
+        "./packages/agent-team/lib/types/vendor/storage-sqlite/index.d.ts"
+      ],
       "@wowyuarm/dsh-agent-team/member-context": [
         "./packages/agent-team/lib/types/member-context.d.ts"
       ],

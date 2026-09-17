@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KvUnit } from '@deepseek-ai/dsh-storage'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
-import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
+import { SqliteStorageBackend } from '../src/vendor/storage-sqlite/index.ts'
 
 /**
  * Storage-layer benchmark backing the pre-release decision to route

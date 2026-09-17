@@ -57,10 +57,10 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-storage-sqlite": ">=0.1.5-rc.1 <0.2.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-storage-sqlite": "0.1.5-rc.2",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^24.0.0",
@@ -107,6 +107,10 @@
     "./preset-roster": {
       "types": "./packages/agent-team/lib/types/preset-roster.d.ts",
       "default": "./packages/agent-team/lib/preset-roster.js"
+    },
+    "./sqlite-backend": {
+      "types": "./packages/agent-team/lib/types/vendor/storage-sqlite/index.d.ts",
+      "default": "./packages/agent-team/lib/vendor/storage-sqlite/index.js"
     },
     "./member-context": {
       "types": "./packages/agent-team/lib/types/member-context.d.ts",

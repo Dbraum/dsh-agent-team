@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { readFile, readdir } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -81,11 +81,18 @@ describe('Agent Team shipping contract', () => {
     expect(patch).toContain("name: '@deepseek-ai/dsh-invariants'")
     expect(patch).toContain("name: '@wowyuarm/dsh-agent-team/invariant'")
     // The Team ledger medium: only agent_team routes to SQLite through the
-    // public per-domain route table. Simulate the real layer stack (the
-    // shipped Web bundle patch, then this bundle's) because insert blocks
-    // append rather than override: a colliding id inside an insert list would
-    // duplicate the shipped row and fail the boot sweep.
-    expect(patch).toContain("name: '@deepseek-ai/dsh-storage-sqlite'")
+    // public per-domain route table. The backend is vendored under our own
+    // package name (see packages/agent-team/src/vendor/storage-sqlite/):
+    // DSH Desktop generation installers strip `@deepseek-ai/*` copies, so a
+    // loader row naming that package blocks boot (GitHub issue #28).
+    // Simulate the real layer stack (the shipped Web bundle patch, then this
+    // bundle's) because insert blocks append rather than override: a
+    // colliding id inside an insert list would duplicate the shipped row and
+    // fail the boot sweep.
+    expect(patch).toContain("name: '@wowyuarm/dsh-agent-team/sqlite-backend'")
+    // The old host-package row must stay gone: re-adding it reintroduces the
+    // Desktop boot block this vendoring exists to fix (GitHub issue #28).
+    expect(patch).not.toContain('@deepseek-ai/dsh-storage-sqlite')
     const composed = applyEntryPatches([], [
       // rc.1 moved the storage rows from web-app into the base bundle; the
       // real layer stack is base → web-app → this bundle. The stack resolves
@@ -135,10 +142,8 @@ describe('Agent Team shipping contract', () => {
     expect(bundleManifest.peerDependencies['@deepseek-ai/dsh-tool-web']).toBe('>=0.1.5-rc.1 <0.1.6')
     expect(bundleManifest.peerDependencies['@deepseek-ai/dsh-command-compact']).toBe('>=0.1.5-rc.1 <0.1.6')
     // The certified baseline moves as one cut: every DSH peer carries the same
-    // range, or an install resolves two DSH generations at once. The routed
-    // storage dependency stays deliberately wider: it is an ordinary
-    // dependency, so it is resolved with the framework line rather than
-    // pinning one certified cut.
+    // range, or an install resolves two DSH generations at once. No host-scope
+    // package may sit in `dependencies` (see the host-scope gate below).
     const dshPeerRanges = new Set(Object.entries(bundleManifest.peerDependencies)
       .filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
       .map(([, range]) => range))
@@ -207,7 +212,7 @@ describe('Agent Team shipping contract', () => {
     expect(manifest.files).toContain('packages/agent-team/lib/**/*')
     expect(manifest.files).toContain('packages/client-agent-team/lib/**/*')
     expect(manifest.name).toBe('@wowyuarm/dsh-agent-team')
-    expect(manifest.dependencies).toEqual({ '@deepseek-ai/dsh-storage-sqlite': '>=0.1.5-rc.1 <0.2.0', zod: '^4.4.3' })
+    expect(manifest.dependencies).toEqual({ zod: '^4.4.3' })
     expect(bundleManifest.dsh.client).toEqual({
       platform: 'web',
       // The Client half classifies a stream end with the Gateway's carrier-error
@@ -236,6 +241,137 @@ describe('Agent Team shipping contract', () => {
     expect(roster).toEqual([expect.objectContaining({ id: 'team-member', trust: 'system' })])
     expect(roster[0]?.broken).toBeUndefined()
     await ctx.fiber.dispose()
+  })
+})
+
+// Boot-critical host-closure surface (GitHub issue #28): DSH Desktop
+// generation installers strip `@deepseek-ai/*` copies from the plugin
+// generation and resolve them from the host closure. A `dependencies` entry
+// would be deleted with the generation, so no host-scope package may sit
+// there; every other reachable root must already be host-side. This test pins
+// that surface: adding a root is a deliberate act in the same change that
+// needs it. Resolvability itself is proven empirically by the stripped-closure
+// boot check, not here.
+describe('Boot-critical host closure surface', () => {
+  // The vendored sqlite backend's only runtime roots beyond our peers (see
+  // packages/agent-team/src/vendor/storage-sqlite/): the kv facet types live
+  // in dsh-storage, the Config validator in schemastery.
+  const SQLITE_VENDOR_EXTRA_RUNTIME_ROOTS = ['@deepseek-ai/dsh-storage', '@deepseek-ai/schemastery']
+  // Pre-existing preset building blocks the host provides outside our peers
+  // (persona text, instruction budget, compaction rows). Pinned, not open:
+  // a new preset row outside peers fails below just like a new import does.
+  const PRESET_HOST_ROWS = [
+    '@deepseek-ai/dsh-persona',
+    '@deepseek-ai/dsh-agent-instructions',
+    '@deepseek-ai/dsh-compaction-basic',
+    '@deepseek-ai/dsh-compaction-tool-result-pruner',
+  ]
+
+  // Value imports survive the build into the shipped bundle; `import type`
+  // erases and can never break the loader, so only value imports count.
+  function valueImportSpecifiers(source: string): string[] {
+    const found: string[] = []
+    for (const pattern of [
+      /import\s+(?!type\b)(?:[^'"]*?\sfrom\s+)?['"]([^'"]+)['"]/g,
+      /export\s+(?!type\b)(?:[^'"]*?\sfrom\s+)['"]([^'"]+)['"]/g,
+      /[^.\w$]import\(\s*['"]([^'"]+)['"]\s*\)/g,
+    ]) {
+      for (const match of source.matchAll(pattern)) {
+        if (match[1] !== undefined) found.push(match[1])
+      }
+    }
+    return found
+  }
+
+  function packageRoot(specifier: string): string | undefined {
+    if (specifier === '' || specifier.startsWith('.') || specifier.startsWith('/') || specifier.startsWith('node:')) return undefined
+    const segments = specifier.split('/')
+    return specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0]
+  }
+
+  it('keeps every reachable runtime root and loader row inside the host closure', async () => {
+    const [manifestText, patch, preset] = await Promise.all([
+      readFile(resolve(root, 'package.json'), 'utf8'),
+      readFile(resolve(root, 'cordis.patch.yml'), 'utf8'),
+      readFile(resolve(root, 'packages/agent-team/preset/team-member/agent.cordis.yml'), 'utf8'),
+    ])
+    const manifest = JSON.parse(manifestText) as {
+      dependencies: Record<string, string>
+      peerDependencies: Record<string, string>
+    }
+    expect(
+      Object.keys(manifest.dependencies).filter(name => name.startsWith('@deepseek-ai/')),
+      'host-scope packages in dependencies are deleted from the Desktop generation with no host fallback',
+    ).toEqual([])
+
+    const reachable = new Map<string, string>()
+    const note = (name: string, via: string) => {
+      if (!reachable.has(name)) reachable.set(name, via)
+    }
+    // The Client ships under a separate bundled contract; only the Host-side
+    // sources whose imports enter the generation matter here.
+    for (const dir of ['packages/agent-team/src', 'packages/tool-agent-team/src']) {
+      const absolute = resolve(root, dir)
+      for (const entry of await readdir(absolute, { recursive: true })) {
+        if (!entry.endsWith('.ts')) continue
+        const file = join(absolute, entry)
+        for (const specifier of valueImportSpecifiers(await readFile(file, 'utf8'))) {
+          // Self-references resolve inside our own installed copy, which the
+          // Desktop strip does not touch. Pinned to our own package name so a
+          // typo'd sibling scope still fails below.
+          if (specifier === '@wowyuarm/dsh-agent-team' || specifier.startsWith('@wowyuarm/dsh-agent-team/')) continue
+          const name = packageRoot(specifier)
+          if (name !== undefined) note(name, file)
+        }
+      }
+    }
+    // Loader rows resolve package names from the same closure, so patch and
+    // preset `name:` rows are reachable roots too. Own-scope rows ship inside
+    // this tarball; Desktop only strips `@deepseek-ai/*`.
+    for (const [text, via] of [[patch, 'cordis.patch.yml'], [preset, 'team-member preset']] as const) {
+      for (const match of text.matchAll(/name:\s*['"]([^'"]+)['"]/g)) {
+        const row = match[1]
+        if (row === undefined || row.startsWith('@wowyuarm/')) continue
+        const name = packageRoot(row)
+        if (name !== undefined && name.startsWith('@deepseek-ai/')) note(name, via)
+      }
+    }
+
+    const allowed = new Set([
+      ...Object.keys(manifest.peerDependencies),
+      ...Object.keys(manifest.dependencies),
+      ...SQLITE_VENDOR_EXTRA_RUNTIME_ROOTS,
+      ...PRESET_HOST_ROWS,
+    ])
+    const outside = [...reachable.entries()]
+      .filter(([name]) => !allowed.has(name))
+      .map(([name, via]) => `${name} (via ${via})`)
+      .sort()
+    expect(outside, 'reachable roots outside peers and the pinned extras would not resolve from a stripped Desktop generation').toEqual([])
+    // Non-vacuous: the vendored extras must actually be reached, or the
+    // allowlist is dead weight hiding a removed fork.
+    for (const extra of SQLITE_VENDOR_EXTRA_RUNTIME_ROOTS) {
+      expect([...reachable.keys()], `the vendored sqlite backend no longer reaches ${extra}`).toContain(extra)
+    }
+  })
+
+  it('keeps the removed sqlite package out of every shipped source import', async () => {
+    // The gate above sees value imports; a type-only import would erase at
+    // build and stay harmless, but it would still tie shipped sources to the
+    // package this vendoring exists to escape — forbid every import kind.
+    // (The compat spec imports it deliberately and lives outside src.)
+    const offenders: string[] = []
+    for (const dir of ['packages/agent-team/src', 'packages/tool-agent-team/src']) {
+      const absolute = resolve(root, dir)
+      for (const entry of await readdir(absolute, { recursive: true })) {
+        if (!entry.endsWith('.ts')) continue
+        const file = join(absolute, entry)
+        if (/(?:import|export)[^'"]*from\s*['"]@deepseek-ai\/dsh-storage-sqlite['"]/.test(await readFile(file, 'utf8'))) {
+          offenders.push(file)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
   })
 })
 
