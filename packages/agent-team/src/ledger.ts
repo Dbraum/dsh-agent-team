@@ -1926,12 +1926,7 @@ export class AgentTeamLedger {
 
   /** One workspace change scope per Workspace the Member participates in — member-level commits wake every panel that lists it. */
   private memberWorkspaceScopes(memberId: AgentTeamMemberId): AgentTeamChangeScope[] {
-    const workspaces = this.state.participations.get(memberId)
-    if (workspaces === undefined || workspaces.size === 0) {
-      const workspaceId = this.state.members.get(memberId)?.workspaceId
-      return workspaceId === undefined ? [] : [{ kind: 'workspace', workspaceId }]
-    }
-    return [...workspaces].map(workspaceId => ({ kind: 'workspace' as const, workspaceId }))
+    return [...(this.state.participations.get(memberId) ?? [])].map(workspaceId => ({ kind: 'workspace' as const, workspaceId }))
   }
 
   /**

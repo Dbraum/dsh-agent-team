@@ -976,7 +976,7 @@ export default class AgentTeam extends TypertRemoteService {
       // follows as its own turn, and the Inbox is rederived from ledger facts.
       reactivated.agent.steer(this.contextManagement.handoffMessageFor(plan))
       for (const message of carriedInput) reactivated.agent.followup(message)
-      const notifications = this.memberNotificationFacts(rolled.member)
+      const notifications = this.requireLedger().notificationFacts(rolled.member.memberId)
       if (notifications.length > 0) this.notifyMember(reactivated.agent, carriedInput.length > 0)
     })
   }
@@ -1017,7 +1017,7 @@ export default class AgentTeam extends TypertRemoteService {
   private steerResume(member: AgentTeamAgentMember, text: string): void {
     const handle = this.handles.get(member.memberId)
     if (handle === undefined) throw new Error(`member '${member.handle}' has no active session`)
-    const notifications = this.memberNotificationFacts(member)
+    const notifications = this.requireLedger().notificationFacts(member.memberId)
     const body = notifications.length === 0 ? text : `${text}\n\n${this.notificationText(notifications, member.memberId)}`
     const hint = createUserMessage({
       content: [{ type: 'text', text: body }],
@@ -2661,16 +2661,11 @@ export default class AgentTeam extends TypertRemoteService {
     for (const workspaceId of this.requireLedger().workspacesOf(member.memberId)) this.emitPresenceChanged(workspaceId)
   }
 
-  /** Inbox facts across every Workspace the Member participates in — participation is the reachability set. */
-  private memberNotificationFacts(member: AgentTeamAgentMember): ReturnType<AgentTeamLedger['notificationFacts']> {
-    return this.requireLedger().notificationFacts(member.memberId)
-  }
-
   /** Wake from durable unread state with bounded facts for direct and state-changing work. */
   private notifyMember(agent: Agent, sequenced = false): void {
     const member = this.memberForAgent(agent)
     if (member === undefined || member.state !== 'enabled') return
-    const notifications = this.memberNotificationFacts(member)
+    const notifications = this.requireLedger().notificationFacts(member.memberId)
     if (notifications.length === 0) {
       this.notifiedInbox.delete(member.memberId)
       return
