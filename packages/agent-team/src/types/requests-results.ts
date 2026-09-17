@@ -225,6 +225,38 @@ export interface AgentTeamRemoveChannelMemberResult {
   readonly removedAttention: readonly AgentTeamThreadAttentionKey[]
 }
 
+/** Human intent to join one Agent Member to one additional Workspace. */
+export interface AgentTeamJoinWorkspaceRequest {
+  readonly requestId: AgentTeamRequestId
+  readonly workspaceId: WorkspaceId
+  readonly memberId: AgentTeamMemberId
+}
+
+export interface AgentTeamJoinWorkspaceResult {
+  readonly receipt: AgentTeamOperationReceipt
+  readonly memberId: AgentTeamMemberId
+  readonly workspaceId: WorkspaceId
+}
+
+/**
+ * Human intent to withdraw one Agent Member from one of its non-default
+ * Workspaces: participation ends, Workspace-scoped Claims release, and the
+ * Member's Attention/markers on that Workspace's Threads clear.
+ */
+export interface AgentTeamLeaveWorkspaceRequest {
+  readonly requestId: AgentTeamRequestId
+  readonly workspaceId: WorkspaceId
+  readonly memberId: AgentTeamMemberId
+}
+
+export interface AgentTeamLeaveWorkspaceResult {
+  readonly receipt: AgentTeamOperationReceipt
+  readonly memberId: AgentTeamMemberId
+  readonly workspaceId: WorkspaceId
+  readonly releasedClaims: readonly AgentTeamClaim[]
+  readonly removedAttention: readonly AgentTeamThreadAttentionKey[]
+}
+
 /** Human intent to add one Agent Member to one Channel. */
 export interface AgentTeamJoinChannelRequest {
   readonly requestId: AgentTeamRequestId
@@ -729,6 +761,8 @@ export interface AgentTeamViewRequest {
 /** Bounded public collaboration facts plus a continuation sequence. */
 export interface AgentTeamView {
   readonly humanMemberId: AgentTeamMemberId
+  /** Every Workspace the viewing Member participates in — the address book for the optional `workspace` selector; `default` marks the Workspace its Session roots in. */
+  readonly workspaces: readonly AgentTeamWorkspaceParticipation[]
   readonly channels: readonly AgentTeamChannel[]
   readonly members: readonly AgentTeamChannelMembership[]
   readonly tasks: readonly AgentTeamTask[]
@@ -739,6 +773,14 @@ export interface AgentTeamView {
   readonly activities: readonly AgentTeamActivity[]
   readonly cursor: number
   readonly hasMore: boolean
+}
+
+/** One Workspace a Member participates in, as exposed to the Member-facing view. */
+export interface AgentTeamWorkspaceParticipation {
+  readonly workspaceId: WorkspaceId
+  /** Registry display title; absent when the Workspace is already gone from the registry (a dangling participation pending cleanup). */
+  readonly title?: string | undefined
+  readonly default: boolean
 }
 
 /** One projection slice a Client can wait on; events wake only matching waiters. */

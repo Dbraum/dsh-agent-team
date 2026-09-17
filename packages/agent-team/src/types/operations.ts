@@ -201,6 +201,44 @@ export interface AgentTeamChannelMemberRemovedOperation extends AgentTeamOperati
 }
 
 /**
+ * Durable addition of one Workspace to an Agent Member's participation set.
+ * Participation is a pure relation: it carries no Session and no execution
+ * semantics — the Member's Session stays rooted in its default Workspace
+ * (`member.workspaceId`, fixed at creation) and collaboration in the joined
+ * Workspace is ledger work addressed by the workspaceId.
+ */
+export interface AgentTeamMemberWorkspaceJoinedOperation extends AgentTeamOperationBase {
+  readonly kind: 'team/member-workspace-joined'
+  readonly data: {
+    readonly workspaceId: WorkspaceId
+    readonly memberId: AgentTeamMemberId
+  }
+}
+
+/**
+ * Durable withdrawal of one non-default Workspace participation: the Member
+ * loses Workspace authority while its identity, Session, and remaining
+ * participations survive untouched. Every active Claim the Member holds on
+ * the Workspace's Threads releases with public Activities, and its Attention
+ * and markers for those Threads clear — a Member that no longer participates
+ * must not leave Tasks stuck in progress or phantom unread counts behind it.
+ */
+export interface AgentTeamMemberWorkspaceLeftOperation extends AgentTeamOperationBase {
+  readonly kind: 'team/member-workspace-left'
+  readonly data: {
+    readonly workspaceId: WorkspaceId
+    readonly memberId: AgentTeamMemberId
+    /** Claims released because this Member lost Workspace authority. */
+    readonly claims: readonly AgentTeamClaim[]
+    /** Public release summaries for the affected Threads. */
+    readonly activities: readonly AgentTeamClaimsReleasedActivity[]
+    readonly tasks: readonly AgentTeamTask[]
+    readonly threads: readonly AgentTeamThread[]
+    readonly inbox: AgentTeamInboxDelta
+  }
+}
+
+/**
  * Durable archival of one Channel: the Channel and its Threads leave every
  * surface while all facts stay recoverable. Every active Claim on the
  * Channel's Threads releases (any owner), and every affected Member's
@@ -420,6 +458,8 @@ export type AgentTeamOperation =
   | AgentTeamMemberUpdatedOperation
   | AgentTeamChannelMemberAddedOperation
   | AgentTeamChannelMemberRemovedOperation
+  | AgentTeamMemberWorkspaceJoinedOperation
+  | AgentTeamMemberWorkspaceLeftOperation
   | AgentTeamChannelArchivedOperation
   | AgentTeamMessageSentOperation
   | AgentTeamThreadRepliedOperation

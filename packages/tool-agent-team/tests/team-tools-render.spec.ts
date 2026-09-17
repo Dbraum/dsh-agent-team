@@ -13,11 +13,13 @@ import { renderText, teamTools, occurrences } from './render-text.ts'
 const THREAD = 'thread:d78400e4-4925-4065-87b1-3f81b4a4b5fb'
 const TASK = 'task:3245ad40-43fd-4191-a416-7dcaf3a340f2'
 const CHANNEL = 'channel:046dd831-c679-4279-b6aa-7813476cf12e'
+const WORKSPACES = [{ workspaceId: 'workspace:alpha', default: true }]
 const CLAIM = 'claim:326f0b21-a41c-4c47-be18-ad0d4ecfc139'
 
 describe('team_view renders one address book', () => {
   it('first page: labelled sections, newest-first subjects, Task inline — no Task index, message count, or revision label', () => {
     const text = renderText(teamTools().get('team_view')!, {}, {
+      workspaces: WORKSPACES,
       channels: [{ channelRef: CHANNEL, name: 'general' }],
       members: [{ memberId: 'member:6e8a5b10-df16-4ec0-943a-63738010953f', kind: 'agent', handle: 'Tars', description: 'builder', presence: 'available' }],
       threads: [
@@ -46,17 +48,18 @@ describe('team_view renders one address book', () => {
 
   it('the footer names the Thread cursor and whether older anchors remain', () => {
     const text = renderText(teamTools().get('team_view')!, {}, {
-      channels: [], members: [], threads: [], tasks: [], cursor: 0, hasMore: false,
+      workspaces: WORKSPACES, channels: [], members: [], threads: [], tasks: [], cursor: 0, hasMore: false,
     })
     expect(text).toContain('Thread cursor 0; hasMore=false — no older Threads remain.')
     const more = renderText(teamTools().get('team_view')!, {}, {
-      channels: [], members: [], threads: [], tasks: [], cursor: 8394, hasMore: true,
+      workspaces: WORKSPACES, channels: [], members: [], threads: [], tasks: [], cursor: 8394, hasMore: true,
     })
     expect(more).toContain('Thread cursor 8394; hasMore=true — older Thread anchors exist; page again with this cursor.')
   })
 
   it('a continuation page renders only the Threads section', () => {
     const text = renderText(teamTools().get('team_view')!, { cursor: 8394 }, {
+      workspaces: WORKSPACES,
       channels: [{ channelRef: CHANNEL, name: 'general' }],
       members: [{ memberId: 'member:6e8a5b10-df16-4ec0-943a-63738010953f', kind: 'agent', handle: 'Tars', description: 'builder', presence: 'available' }],
       threads: [{ threadRef: THREAD, channelRef: CHANNEL, revision: 8394, messageCount: 120, subject: 'Review the render contract' }],
@@ -70,7 +73,7 @@ describe('team_view renders one address book', () => {
 
   it('prints each structured subject verbatim on its Thread row', () => {
     const text = renderText(teamTools().get('team_view')!, {}, {
-      channels: [], members: [],
+      workspaces: WORKSPACES, channels: [], members: [],
       threads: [{ threadRef: THREAD, channelRef: CHANNEL, revision: 1, messageCount: 1, subject: 'One deterministic bounded subject line' }],
       tasks: [], cursor: 0, hasMore: false,
     })
@@ -580,7 +583,7 @@ describe('team tools render absolute event instants in UTC+8', () => {
     })
     expect(inbox).toContain(`4 unread, 1 direct · newest 2026-09-08T16:58:41+08:00`)
     const view = renderText(teamTools().get('team_view')!, {}, {
-      channels: [], members: [],
+      workspaces: WORKSPACES, channels: [], members: [],
       threads: [{ threadRef: THREAD, channelRef: CHANNEL, revision: 1, messageCount: 3, subject: 'Investigate startup failure', lastActivityAt: '2026-08-21T01:30:44.000Z' }],
       tasks: [], cursor: 0, hasMore: false,
     })

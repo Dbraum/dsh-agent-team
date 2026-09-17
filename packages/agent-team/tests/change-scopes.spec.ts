@@ -15,6 +15,7 @@ import type { AgentTeamChangeScope, AgentTeamChannelRef, AgentTeamMemberActor, A
 
 const cleanups: Array<() => Promise<void>> = []
 const alpha = WorkspaceId('workspace:alpha')
+const beta = WorkspaceId('workspace:beta')
 const requestId = (value: string): AgentTeamRequestId => value as AgentTeamRequestId
 
 afterEach(async () => {
@@ -106,6 +107,28 @@ async function startThread(ctx: Context, label: string): Promise<{ readonly thre
 }
 
 describe('scoped Team change notifications', () => {
+  it('derives member-workspace join/leave scopes and affected members', async () => {
+    const { ctx, facility } = await harness()
+    const thread = await startThread(ctx, 'derive-participation')
+    const ledger = replayLedger(facility)
+    const actor = await addLedgerMember(ledger, thread.channelRef)
+    const joinRequest = { requestId: requestId('derive-join'), workspaceId: beta,
+      memberId: actor.memberId, actor: agentTeamHumanActor() }
+    const joined = await ledger.joinWorkspace(joinRequest)
+    expect(joined.committed).toBe(true)
+    const joinOperation = ledger.getOperation(joined.value.receipt.operationId)
+    expect(joinOperation).toBeDefined()
+    expect(ledger.changeScopesOf(joinOperation!)).toEqual([{ kind: 'workspace', workspaceId: beta }])
+    expect(ledger.affectedMembersOf(joinOperation!)).toEqual([actor.memberId])
+    const left = await ledger.leaveWorkspace({ requestId: requestId('derive-leave'), workspaceId: beta,
+      memberId: actor.memberId, actor: agentTeamHumanActor() })
+    expect(left.committed).toBe(true)
+    const leaveOperation = ledger.getOperation(left.value.receipt.operationId)
+    expect(leaveOperation).toBeDefined()
+    expect(ledger.changeScopesOf(leaveOperation!)).toEqual([{ kind: 'workspace', workspaceId: beta }])
+    expect(ledger.affectedMembersOf(leaveOperation!)).toEqual([actor.memberId])
+  })
+
   it('does not wake or advance any waiter when a Human Thread read makes no progress', async () => {
     const { ctx } = await harness()
     const thread = await startThread(ctx, 'read-scope')

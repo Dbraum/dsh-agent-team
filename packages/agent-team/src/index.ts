@@ -63,6 +63,10 @@ import type {
   AgentTeamInboxRequest,
   AgentTeamJoinChannelRequest,
   AgentTeamJoinChannelResult,
+  AgentTeamJoinWorkspaceRequest,
+  AgentTeamJoinWorkspaceResult,
+  AgentTeamLeaveWorkspaceRequest,
+  AgentTeamLeaveWorkspaceResult,
   AgentTeamHumanActor,
   AgentTeamMemberActor,
   AgentTeamMessageAttachment,
@@ -88,6 +92,7 @@ import type {
   AgentTeamOperationId,
   AgentTeamRemoveChannelMemberRequest,
   AgentTeamRemoveChannelMemberResult,
+  AgentTeamRequestId,
   AgentTeamRemoveMemberRequest,
   AgentTeamRemoveMemberResult,
   AgentTeamReplyRequest,
@@ -477,7 +482,7 @@ export default class AgentTeam extends TypertRemoteService {
       const kind = classifyRecoverableError(message)
       if (kind !== undefined) this.ctx.logger.warn(`agent-team: member '${member.handle}' hit a recoverable ${kind} error; recording a consecutive error occurrence`)
       this.recovery.onError(member.memberId, message)
-      this.emitPresenceChanged(member.workspaceId)
+      this.emitMemberPresenceChanged(member)
     })
     this.ctx.on('agent/status', ({ agent, status }) => {
       const member = this.memberForAgent(agent)
@@ -486,7 +491,7 @@ export default class AgentTeam extends TypertRemoteService {
       if (status === 'running' && member !== undefined) {
         const recovered = this.clearMemberFailure(member.memberId, 'runtime')
         if (recovered) this.notifiedInbox.delete(member.memberId)
-        this.emitPresenceChanged(member.workspaceId)
+        this.emitMemberPresenceChanged(member)
         // A rollover/recovery in flight delivers its own sequenced
         // rederived Inbox after the handoff and carried input; a status-driven
         // steer here would claim the handoff turn's next step and leapfrog
@@ -502,7 +507,7 @@ export default class AgentTeam extends TypertRemoteService {
         if (this.memberFailures.get(member.memberId)?.runtime === undefined) {
           this.recovery.onCleanTurnEnd(member.memberId)
         }
-        this.emitPresenceChanged(member.workspaceId)
+        this.emitMemberPresenceChanged(member)
       }
     })
     // The store's dispatch carrier is untagged, so a scope-tagged listener
@@ -562,9 +567,33 @@ export default class AgentTeam extends TypertRemoteService {
     // One metadata listing serves every Member restore; per-member list calls
     // would repeat the same I/O linearly during startup.
     const persistedSessions = new Set((await this.persistedSessionHeaders()).map(snapshot => snapshot.header.id))
+    await this.sweepWorkspaceParticipations(ledger)
     for (const member of ledger.listMembers()) {
       if (member.state === 'enabled') await this.activateMember(member, undefined, persistedSessions)
       else if (member.state === 'inactive') await this.memberRuntime.cleanupRemovedMember(member)
+    }
+  }
+
+  /**
+   * Lazy Workspace-deletion handling: a Workspace that no longer exists can
+   * only be detected through the registry — there is no deletion event. A
+   * dead non-default participation is withdrawn here (its Claims and
+   * Attention release through the normal leave path); a dead default
+   * Workspace is left alone — activation fails on its missing cwd and the
+   * Member surfaces as unavailable for Human attention.
+   */
+  private async sweepWorkspaceParticipations(ledger: AgentTeamLedger): Promise<void> {
+    for (const member of ledger.listMembers()) {
+      if (member.state === 'inactive' || member.state === 'archived') continue
+      for (const workspaceId of ledger.workspacesOf(member.memberId)) {
+        if (workspaceId === member.workspaceId || this.ctx.workspaceRegistry.get(workspaceId) !== undefined) continue
+        this.ctx.logger.warn(`agent-team: workspace '${workspaceId}' is gone; withdrawing member '${member.handle}' from it`)
+        try {
+          await ledger.leaveWorkspace({ requestId: randomUUID() as AgentTeamRequestId, workspaceId, memberId: member.memberId, actor: agentTeamHumanActor() })
+        } catch (error) {
+          this.ctx.logger.warn(`agent-team: failed to withdraw member '${member.handle}' from deleted workspace '${workspaceId}': ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
     }
   }
 
@@ -611,7 +640,7 @@ export default class AgentTeam extends TypertRemoteService {
   membersForClient(request: AgentTeamMembersRequest): readonly AgentTeamClientMemberStatus[] {
     this.requireWorkspace(request.workspaceId)
     return this.members()
-      .filter(status => status.member.workspaceId === request.workspaceId)
+      .filter(status => this.requireLedger().participatesIn(status.member.memberId, request.workspaceId))
       .map(({ member: { privateMemoryPath: _privateMemoryPath, ...member }, ...status }) => Object.freeze({ ...status, member: Object.freeze(member) }))
   }
 
@@ -757,7 +786,7 @@ export default class AgentTeam extends TypertRemoteService {
   async recoverMember(request: AgentTeamRecoverMemberRequest): Promise<AgentTeamRecoverMemberResult> {
     this.requireAccepting()
     const member = this.requireLedger().getMember(request.memberId)
-    if (member === undefined || member.workspaceId !== request.workspaceId) throw new Error(`unknown Member '${request.memberId}' in workspace '${request.workspaceId}'`)
+    if (member === undefined || !this.requireLedger().participatesIn(request.memberId, request.workspaceId)) throw new Error(`unknown Member '${request.memberId}' in workspace '${request.workspaceId}'`)
     this.recovery.stopTracking(request.memberId)
     // An orphaned composition cannot be steered: its tools are gone, so a
     // continuation prompt reaches an inert Member. Rebuild the Agent in place.
@@ -814,7 +843,7 @@ export default class AgentTeam extends TypertRemoteService {
       this.requireAccepting()
       this.requireWorkspace(request.workspaceId)
       const stored = this.requireLedger().getMember(request.memberId)
-      if (stored === undefined || stored.workspaceId !== request.workspaceId) throw new Error(`unknown Member '${request.memberId}' in workspace '${request.workspaceId}'`)
+      if (stored === undefined || !this.requireLedger().participatesIn(request.memberId, request.workspaceId)) throw new Error(`unknown Member '${request.memberId}' in workspace '${request.workspaceId}'`)
       if (stored.state !== 'enabled') throw new Error(`Agent Member '${stored.handle}' is ${stored.state}; only enabled Members can start from a new context`)
       const active = this.handles.get(request.memberId)
       if (active === undefined) throw new Error(`Agent Member '${stored.handle}' has no active session to clear`)
@@ -946,7 +975,7 @@ export default class AgentTeam extends TypertRemoteService {
       // follows as its own turn, and the Inbox is rederived from ledger facts.
       reactivated.agent.steer(this.contextManagement.handoffMessageFor(plan))
       for (const message of carriedInput) reactivated.agent.followup(message)
-      const notifications = this.requireLedger().notificationFacts(memberId, { workspaceId: rolled.member.workspaceId })
+      const notifications = this.memberNotificationFacts(rolled.member)
       if (notifications.length > 0) this.notifyMember(reactivated.agent, carriedInput.length > 0)
     })
   }
@@ -987,7 +1016,7 @@ export default class AgentTeam extends TypertRemoteService {
   private steerResume(member: AgentTeamAgentMember, text: string): void {
     const handle = this.handles.get(member.memberId)
     if (handle === undefined) throw new Error(`member '${member.handle}' has no active session`)
-    const notifications = this.requireLedger().notificationFacts(member.memberId, { workspaceId: member.workspaceId })
+    const notifications = this.memberNotificationFacts(member)
     const body = notifications.length === 0 ? text : `${text}\n\n${this.notificationText(notifications, member.memberId)}`
     const hint = createUserMessage({
       content: [{ type: 'text', text: body }],
@@ -1121,6 +1150,24 @@ export default class AgentTeam extends TypertRemoteService {
   async removeChannelMember(request: AgentTeamRemoveChannelMemberRequest): Promise<AgentTeamRemoveChannelMemberResult> {
     const actor = this.humanCall(request.workspaceId)
     const result = await this.requireLedger().removeChannelMember({ ...request, actor })
+    if (result.committed) this.emitCommitted(result.value.receipt)
+    return result.value
+  }
+
+  /** Human-only Workspace participation grant; a pure relation — no Session moves. */
+  @Remote('joinWorkspace')
+  async joinWorkspace(request: AgentTeamJoinWorkspaceRequest): Promise<AgentTeamJoinWorkspaceResult> {
+    const actor = this.humanCall(request.workspaceId)
+    const result = await this.requireLedger().joinWorkspace({ ...request, actor })
+    if (result.committed) this.emitCommitted(result.value.receipt)
+    return result.value
+  }
+
+  /** Human-only Workspace participation withdrawal and Workspace-scoped cleanup. */
+  @Remote('leaveWorkspace')
+  async leaveWorkspace(request: AgentTeamLeaveWorkspaceRequest): Promise<AgentTeamLeaveWorkspaceResult> {
+    const actor = this.humanCall(request.workspaceId)
+    const result = await this.requireLedger().leaveWorkspace({ ...request, actor })
     if (result.committed) this.emitCommitted(result.value.receipt)
     return result.value
   }
@@ -1395,12 +1442,16 @@ export default class AgentTeam extends TypertRemoteService {
     return this.requireLedger().threadHistory(actor, request)
   }
 
-  /** Agent-only bounded discovery projection. */
+  /** Agent-only bounded discovery projection; participation list carries registry titles when known. */
   viewForAgent(agent: Agent, request: AgentTeamViewRequest): AgentTeamView {
     const member = this.memberForAgent(agent)
     if (member === undefined) throw new Error('Agent is not an active Team Member')
-    if (member.workspaceId !== request.workspaceId) throw new Error('Member cannot view another Workspace')
-    return this.requireLedger().view(request, member.memberId)
+    if (!this.requireLedger().participatesIn(member.memberId, request.workspaceId)) throw new Error('Member cannot view another Workspace')
+    const view = this.requireLedger().view(request, member.memberId)
+    return Object.freeze({ ...view, workspaces: Object.freeze(view.workspaces.map(participation => {
+      const title = this.ctx.workspaceRegistry.get(participation.workspaceId)?.title
+      return title === undefined ? participation : Object.freeze({ ...participation, title })
+    })) })
   }
 
   /** Validate the durable ledger against an independently replayed projection. */
@@ -2107,9 +2158,10 @@ export default class AgentTeam extends TypertRemoteService {
     return agentTeamHumanActor()
   }
 
-  /** Fence one Member call: accepting Host, live Member binding, matching Workspace. */
+  /** Fence one Member call: accepting Host, live Member binding, matching Workspace participation. */
   private memberCall(agent: Agent, workspaceId: AgentTeamViewRequest['workspaceId']): AgentTeamMemberActor {
     this.requireAccepting()
+    this.requireWorkspace(workspaceId)
     const actor = this.memberActor(agent)
     this.requireAgentWorkspace(actor, workspaceId)
     return actor
@@ -2122,7 +2174,7 @@ export default class AgentTeam extends TypertRemoteService {
   }
 
   private requireAgentWorkspace(actor: AgentTeamMemberActor, workspaceId: AgentTeamViewRequest['workspaceId']): void {
-    if (this.requireLedger().getMember(actor.memberId)?.workspaceId !== workspaceId) throw new Error('Member cannot mutate another Workspace')
+    if (!this.requireLedger().participatesIn(actor.memberId, workspaceId)) throw new Error('Member cannot mutate another Workspace')
   }
 
   /**
@@ -2366,7 +2418,7 @@ export default class AgentTeam extends TypertRemoteService {
       this.setActivationDiagnostic(member.memberId, this.activationDiagnosticOf(error, member.sessionId))
     } finally {
       // Activation only changes this Workspace's presence projection.
-      this.emitPresenceChanged(member.workspaceId)
+      this.emitMemberPresenceChanged(member)
     }
   }
 
@@ -2565,9 +2617,7 @@ export default class AgentTeam extends TypertRemoteService {
   }
 
   private emitAutoCompactionChanged(memberId: AgentTeamMemberId): void {
-    const workspaceId = this.ledger?.getMember(memberId)?.workspaceId
-    if (workspaceId === undefined) return
-    this.emitPresenceChanged(workspaceId)
+    for (const workspaceId of this.ledger?.workspacesOf(memberId) ?? []) this.emitPresenceChanged(workspaceId)
   }
 
   /**
@@ -2579,11 +2629,23 @@ export default class AgentTeam extends TypertRemoteService {
     this.emitChanged([{ kind: 'presence', workspaceId }])
   }
 
+  /** Presence invalidation in every Workspace the Member participates in — each panel listing it must refresh. */
+  private emitMemberPresenceChanged(member: AgentTeamAgentMember): void {
+    for (const workspaceId of this.requireLedger().workspacesOf(member.memberId)) this.emitPresenceChanged(workspaceId)
+  }
+
+  /** Inbox facts across every Workspace the Member participates in — participation is the reachability set. */
+  private memberNotificationFacts(member: AgentTeamAgentMember): ReturnType<AgentTeamLedger['notificationFacts']> {
+    const ledger = this.requireLedger()
+    return Object.freeze(ledger.workspacesOf(member.memberId)
+      .flatMap(workspaceId => ledger.notificationFacts(member.memberId, { workspaceId })))
+  }
+
   /** Wake from durable unread state with bounded facts for direct and state-changing work. */
   private notifyMember(agent: Agent, sequenced = false): void {
     const member = this.memberForAgent(agent)
     if (member === undefined || member.state !== 'enabled') return
-    const notifications = this.requireLedger().notificationFacts(member.memberId, { workspaceId: member.workspaceId })
+    const notifications = this.memberNotificationFacts(member)
     if (notifications.length === 0) {
       this.notifiedInbox.delete(member.memberId)
       return

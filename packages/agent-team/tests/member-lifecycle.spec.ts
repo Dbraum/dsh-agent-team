@@ -172,6 +172,7 @@ async function realHarness(
   readonly workspaceId: WorkspaceId
   readonly root: string
   readonly project: string
+  readonly workspaces: Map<WorkspaceId, { id: WorkspaceId; path: string; attachSession: () => Promise<void> }>
   readonly teamFiber: Awaited<ReturnType<Context['plugin']>>
   /** Sessions the fake workspace registry archived, in archive order. */
   readonly archived: readonly SessionId[]
@@ -258,17 +259,46 @@ async function realHarness(
   ctx.provide('storageDomain', facility)
   const workspaceId = WorkspaceId('workspace:member-test')
   const archived: SessionId[] = []
+  const workspaces = new Map([[workspaceId, { id: workspaceId, path: project, attachSession: async () => {} }]])
   ctx.provide('workspaceRegistry', {
-    get: (id: WorkspaceId) => id === workspaceId ? { id, path: project, attachSession: async () => {} } : undefined,
+    get: (id: WorkspaceId) => workspaces.get(id),
     list: () => [],
     archiveSession: async (sessionId: SessionId) => { archived.push(sessionId) },
   })
   const teamFiber = await ctx.plugin(AgentTeam)
   cleanups.push(async () => { await ctx.fiber.dispose(); await facility.closeAll(); await rm(root, { recursive: true, force: true }) })
-  return { ctx, workspaceId, root, project, teamFiber, archived, presets: ctx.agentPresets as TestablePresets, pressureState, jobsState }
+  return { ctx, workspaceId, root, project, workspaces, teamFiber, archived, presets: ctx.agentPresets as TestablePresets, pressureState, jobsState }
 }
 
 describe('Agent Team Member lifecycle', () => {
+  it('works in a joined Workspace through the existing live Session and withdraws without disposing it', async () => {
+    const { ctx, workspaceId, project, root, workspaces, archived } = await realHarness()
+    const otherId = WorkspaceId('workspace:joined')
+    workspaces.set(otherId, { id: otherId, path: join(root, 'other-project'), attachSession: async () => {} })
+    const added = await ctx.agentTeam.addMember({ requestId: requestId('global-add'), workspaceId,
+      handle: 'builder', description: '', presetId: 'team-member', channelRefs: [] })
+    expect(added.status.availability, JSON.stringify(added.status)).toBe('active')
+    const memberId = added.status.member.memberId
+    const agent = ctx.agents.get(added.status.member.sessionId)!
+    await ctx.agentTeam.joinWorkspace({ requestId: requestId('global-join'), workspaceId: otherId, memberId })
+    expect(ctx.agentTeam.membersForClient({ workspaceId: otherId }).map(status => status.member.memberId)).toEqual([memberId])
+    const channel = await ctx.agentTeam.createChannel({ requestId: requestId('global-channel'), workspaceId: otherId,
+      name: 'work', description: '', memberIds: [memberId] })
+    const result = await ctx.tools.execute({ signal: new AbortController().signal, callId: ToolCallId('global-start'),
+      name: 'team_message', arguments: { action: 'start', workspace: otherId, channelRef: channel.channel.channelRef, body: 'Working in joined checkout' }, agent })
+    expect(result.isError, result.isError ? result.error.message : '').toBe(false)
+    expect(ctx.agentTeam.view({ workspaceId: otherId }).items[0]?.message.body).toBe('Working in joined checkout')
+    expect(agent.session.header.cwd).toBe(project)
+    expect(ctx.agents.get(added.status.member.sessionId)).toBe(agent)
+    await ctx.agentTeam.leaveWorkspace({ requestId: requestId('global-leave'), workspaceId: otherId, memberId })
+    expect(ctx.agentTeam.membersForClient({ workspaceId: otherId })).toEqual([])
+    expect(ctx.agents.get(added.status.member.sessionId)).toBe(agent)
+    expect(ctx.agentTeam.memberForAgent(agent)).toEqual(added.status.member)
+    expect(archived).toEqual([])
+    expect(() => ctx.agentTeam.viewForAgent(agent, { workspaceId: otherId })).toThrow(/another Workspace/)
+    ctx.agentTeam.validateLedger()
+  })
+
   it('archives a Member: session disposed and archived, private memory kept, claims released', async () => {
     const { ctx, workspaceId, archived } = await realHarness()
     const channel = await ctx.agentTeam.createChannel({ requestId: requestId('archive-channel'), workspaceId, name: 'engineering', description: 'Engineering work' })

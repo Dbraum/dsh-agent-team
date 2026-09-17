@@ -119,6 +119,88 @@ async function addLedgerMember(
 }
 
 describe('AgentTeam durable Thread Attention ledger', () => {
+  it('replays Workspace participation without moving the default Workspace or Session', async () => {
+    const test = await harness(new MemoryMediaPool(), [alpha, beta])
+    const ledger = replayLedger(test)
+    const { member, actor } = await addLedgerMember(ledger, undefined)
+    const joinRequest = { requestId: requestId('workspace-join'), workspaceId: beta, memberId: member.memberId, actor: agentTeamHumanActor() }
+    expect(ledger.workspacesOf(member.memberId)).toEqual([alpha])
+    expect(() => ledger.view({ workspaceId: beta }, member.memberId)).toThrow(/another Workspace/)
+    const joined = await ledger.joinWorkspace(joinRequest)
+    expect(joined.committed).toBe(true)
+    expect((await ledger.joinWorkspace(joinRequest)).committed).toBe(false)
+    await expect(ledger.joinWorkspace({ ...joinRequest, workspaceId: alpha })).rejects.toThrow()
+    expect(ledger.getMember(member.memberId)).toEqual(member)
+    expect(ledger.view({ workspaceId: beta }, member.memberId).workspaces).toEqual([
+      { workspaceId: alpha, default: true }, { workspaceId: beta, default: false },
+    ])
+    const channel = (await ledger.createChannel({ requestId: requestId('joined-channel'), workspaceId: beta,
+      name: 'joined', description: '', memberIds: [member.memberId], actor: agentTeamHumanActor() })).value.channel
+    const sent = committed((await ledger.sendMessage({ requestId: requestId('joined-message'), workspaceId: beta,
+      channelRef: channel.channelRef, body: 'Working in beta', asTask: false, actor })).value)
+    expect(sent.message.sender).toBe(member.memberId)
+    const replay = replayLedger(test)
+    expect(replay.workspacesOf(member.memberId)).toEqual([alpha, beta])
+    expect(replay.getMember(member.memberId)).toEqual(member)
+    expect(replay.view({ workspaceId: beta }, member.memberId).channels).toContainEqual(channel)
+    replay.validate()
+  })
+
+  it('withdraws only the target Workspace and rejects subsequent work there', async () => {
+    const test = await harness(new MemoryMediaPool(), [alpha, beta])
+    const ledger = replayLedger(test)
+    const { member, actor } = await addLedgerMember(ledger, undefined)
+    await ledger.joinWorkspace({ requestId: requestId('join-beta'), workspaceId: beta, memberId: member.memberId, actor: agentTeamHumanActor() })
+    const claims = []
+    for (const workspaceId of [alpha, beta]) {
+      const channel = (await ledger.createChannel({ requestId: requestId(`channel-${workspaceId}`), workspaceId,
+        name: 'work', description: '', memberIds: [member.memberId], actor: agentTeamHumanActor() })).value.channel
+      const sent = withTask(committed((await ledger.sendMessage({ requestId: requestId(`message-${workspaceId}`), workspaceId,
+        channelRef: channel.channelRef, body: 'Task', asTask: true, actor })).value))
+      const claim = committed((await ledger.changeClaim({ requestId: requestId(`claim-${workspaceId}`), workspaceId,
+        taskRef: sent.task.taskRef, baseRevision: sent.thread.revision, action: 'claim', direction: 'Implement', actor })).value)
+      claims.push({ workspaceId, channel, sent, claim })
+    }
+    const leaveRequest = { requestId: requestId('leave-beta'), workspaceId: beta, memberId: member.memberId, actor: agentTeamHumanActor() }
+    const left = await ledger.leaveWorkspace(leaveRequest)
+    expect(left.value.releasedClaims.map(claim => claim.claimRef)).toEqual([claims[1]!.claim.claim.claimRef])
+    expect(left.value.removedAttention).toContainEqual({ memberId: member.memberId, threadRef: claims[1]!.sent.thread.threadRef })
+    expect((await ledger.leaveWorkspace(leaveRequest)).committed).toBe(false)
+    expect(ledger.workspacesOf(member.memberId)).toEqual([alpha])
+    expect(ledger.getMember(member.memberId)).toEqual(member)
+    expect(ledger.listClaims(actor, { workspaceId: alpha, taskRef: claims[0]!.sent.task.taskRef }).claims[0]?.state).toBe('active')
+    expect(() => ledger.view({ workspaceId: beta }, member.memberId)).toThrow(/another Workspace/)
+    expect(ledger.view({ workspaceId: beta }).members).not.toContainEqual({ channelRef: claims[1]!.channel.channelRef, memberId: member.memberId })
+    await expect(ledger.reply({ requestId: requestId('reply-after-leave'), workspaceId: beta,
+      threadRef: claims[1]!.sent.thread.threadRef, baseRevision: claims[1]!.claim.thread.revision, body: 'Late reply', actor })).rejects.toThrow(/another Workspace/)
+    await expect(ledger.leaveWorkspace({ ...leaveRequest, requestId: requestId('leave-default'), workspaceId: alpha })).rejects.toThrow(/default Workspace/)
+    const replay = replayLedger(test)
+    expect(replay.workspacesOf(member.memberId)).toEqual([alpha])
+    replay.validate()
+    await replay.joinWorkspace({ ...leaveRequest, requestId: requestId('rejoin-beta') })
+    expect(replay.view({ workspaceId: beta }, member.memberId).channels).toEqual([])
+  })
+
+  it('checks handle collisions across all participations, including suspended Members', async () => {
+    const test = await harness(new MemoryMediaPool(), [alpha, beta])
+    const ledger = replayLedger(test)
+    const first = await addLedgerMember(ledger, undefined, 'member:first', '', 'builder')
+    const second = await addLedgerMember(ledger, undefined, 'member:second', '', 'reviewer')
+    await ledger.suspendMember({ requestId: requestId('suspend'), memberId: first.member.memberId, actor: agentTeamHumanActor() })
+    await ledger.joinWorkspace({ requestId: requestId('join-first'), workspaceId: beta, memberId: first.member.memberId, actor: agentTeamHumanActor() })
+    expect(ledger.getMember(first.member.memberId)?.state).toBe('suspended')
+    const other = { ...second.member, memberId: 'member:beta-peer' as AgentTeamAgentMember['memberId'], workspaceId: beta, sessionId: SessionId('session:beta-peer') }
+    await ledger.addMember({ requestId: requestId('beta-peer'), workspaceId: beta, member: other,
+      handle: 'peer', description: '', presetId: 'team-member', channelRefs: [], actor: agentTeamHumanActor() })
+    await expect(ledger.updateMember({ requestId: requestId('rename-collision'), memberId: first.member.memberId,
+      handle: 'PEER', description: '', actor: agentTeamHumanActor() })).rejects.toThrow(/already active/)
+    await ledger.updateMember({ requestId: requestId('rename-second'), memberId: second.member.memberId,
+      handle: 'peer', description: '', actor: agentTeamHumanActor() })
+    await expect(ledger.joinWorkspace({ requestId: requestId('join-collision'), workspaceId: beta,
+      memberId: second.member.memberId, actor: agentTeamHumanActor() })).rejects.toThrow(/already active/)
+    replayLedger(test).validate()
+  })
+
   it('boots a v1 empty Team and rejects old ledger media', async () => {
     const pool = new MemoryMediaPool()
     const first = await harness(pool)

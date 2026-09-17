@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import AgentTeam, { AGENT_TEAM_HUMAN_HANDLE, AgentTeamDmDeliveryError, markAgentTeamPreset } from '@wowyuarm/dsh-agent-team/host'
 import { formatTeamTimestamp } from '@wowyuarm/dsh-agent-team/time-format'
 import { registerContextTools } from './context-tools.ts'
-import { member, service } from './host-access.ts'
+import { member, service, workspaceOf, workspaceParam } from './host-access.ts'
 import type {
   AgentTeamClaimRef,
   AgentTeamMemberId,
@@ -188,7 +188,7 @@ function rejectionLines(
 const teamInbox = defineTool({
   name: 'team_inbox',
   description: 'List your bounded Team Inbox for triage: unread Thread summaries with counts, without message bodies and without marking anything read. Read a selected Thread with team_thread read; the inbox itself authorizes no mutation.',
-  parameters: { limit: { type: 'number' } },
+  parameters: { limit: { type: 'number' }, workspace: workspaceParam },
   output: {
     schema: { type: 'object', additionalProperties: false, properties: {
       totalUnreadCount: { type: 'number', required: true }, totalDirectCount: { type: 'number', required: true },
@@ -222,8 +222,8 @@ const teamInbox = defineTool({
     if (agent === undefined) throw new Error('team_inbox requires an Agent session')
     const current = member(agent)
     const host = service(agent)
-    const inbox = host.inboxForAgent(agent, { workspaceId: current.workspaceId, ...(args.limit === undefined ? {} : { limit: args.limit }) })
-    const taskNumbers = new Map(host.viewForAgent(agent, { workspaceId: current.workspaceId, topLevelOnly: true, includeActivities: false, direction: 'before' })
+    const inbox = host.inboxForAgent(agent, { workspaceId: workspaceOf(args, current), ...(args.limit === undefined ? {} : { limit: args.limit }) })
+    const taskNumbers = new Map(host.viewForAgent(agent, { workspaceId: workspaceOf(args, current), topLevelOnly: true, includeActivities: false, direction: 'before' })
       .taskNumbers.map(entry => [entry.taskRef, entry.taskNumber] as const))
     return {
       totalUnreadCount: inbox.totalUnreadCount, totalDirectCount: inbox.totalDirectCount,
@@ -245,7 +245,7 @@ const teamThread = defineTool({
     action: { type: 'string', required: true, enum: ['status', 'follow', 'unfollow', 'read', 'history'] },
     threadRef: { type: 'string', description: "Full branded Thread ref exactly as returned by Team tools, including the 'thread:' prefix. An unambiguous abbreviation of the first 6+ UUID hex characters also resolves." },
     taskRef: { type: 'string', description: "Optional Task ref alias for released clients. Prefer threadRef; if both are given they must identify the same Thread." },
-    beforeSequence: { type: 'number' }, limit: { type: 'number' },
+    beforeSequence: { type: 'number' }, limit: { type: 'number' }, workspace: workspaceParam,
   },
   output: {
     schema: { type: 'object', additionalProperties: false, properties: {
@@ -344,10 +344,10 @@ const teamThread = defineTool({
     const current = member(agent)
     const host = service(agent)
     if (args.threadRef === undefined && args.taskRef === undefined) throw new Error('team_thread requires threadRef')
-    const base = { workspaceId: current.workspaceId, ...(args.threadRef === undefined ? {} : { threadRef: args.threadRef as AgentTeamThreadRef }), ...(args.taskRef === undefined ? {} : { taskRef: args.taskRef as AgentTeamTaskRef }) }
+    const base = { workspaceId: workspaceOf(args, current), ...(args.threadRef === undefined ? {} : { threadRef: args.threadRef as AgentTeamThreadRef }), ...(args.taskRef === undefined ? {} : { taskRef: args.taskRef as AgentTeamTaskRef }) }
     const taskNumberOf = (task: { taskRef: AgentTeamTaskRef } | undefined): { taskNumber?: number } => {
       if (task === undefined) return {}
-      const resolved = host.resolveTaskRefs({ workspaceId: current.workspaceId, taskRefs: [task.taskRef] }).resolved[0]
+      const resolved = host.resolveTaskRefs({ workspaceId: base.workspaceId, taskRefs: [task.taskRef] }).resolved[0]
       return resolved === undefined ? {} : { taskNumber: resolved.taskNumber }
     }
     if (args.action === 'status') {
@@ -431,6 +431,7 @@ const teamMessage = markAgentTeamPreset(defineTool({
     asTask: { type: 'boolean', description: 'When true, start creates a Task with the Thread. Default false creates a taskless Thread.' },
     body: { type: 'string', required: true, description: "Markdown body. Lead with the conclusion or state. Mention the Human only when they must know or decide; when a decision is owed, say plainly what needs deciding and what happens by default if nobody answers — no fixed template. Keep it the shortest useful message for the recipients; mechanical detail follows below. Cite Team refs exactly as returned, as bare text with one colon (e.g. task:0f0a…) — never a double colon, never inside backticks or quotes. Unambiguous UUID abbreviations (first 6+ hex chars) also resolve. Mention a Member by writing `@Handle` (`@` required, case-insensitive) in the prose: that is what delivers the Message to them and renders the mention chip, and `@all` reaches the whole Channel." }, baseRevision: { type: 'number', description: "The next-write token from your latest fully drained team_thread read (or your own last committed mutation) on this Thread. Copy the explicitly rendered value verbatim; never increment, derive, compare, or cite it — it is an opaque concurrency token, not a fact about the Thread." },
     attachments: { type: 'array', items: { type: 'string' }, description: 'Absolute file paths to share, e.g. screenshots or generated artifacts; images render as thumbnails for recipients. The Host validates each path and copies the file into the attachment cache, and members also receive one cached path per attachment; if any path fails validation the whole send is rejected.' },
+    workspace: workspaceParam,
   },
   output: {
     schema: { type: 'object', additionalProperties: false, properties: {
@@ -479,7 +480,7 @@ const teamMessage = markAgentTeamPreset(defineTool({
     const paths = attachmentPaths !== undefined && attachmentPaths.length > 0 ? { attachmentPaths } : {}
     if (args.action === 'start') {
       if (args.channelRef === undefined || args.taskRef !== undefined || args.threadRef !== undefined || args.baseRevision !== undefined) throw new Error('start requires channelRef and does not accept threadRef, taskRef, or baseRevision')
-      const result = await host.sendMessageForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: current.workspaceId,
+      const result = await host.sendMessageForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: workspaceOf(args, current),
         channelRef: args.channelRef as never, body: args.body, asTask: args.asTask === true, ...paths })
       return messageOutcome(result, 'start')
     }
@@ -489,7 +490,7 @@ const teamMessage = markAgentTeamPreset(defineTool({
         throw new Error('dm requires memberRef and body only; it does not accept channelRef, threadRef, taskRef, baseRevision, asTask, or attachments')
       }
       try {
-        const result = await host.dmForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: current.workspaceId,
+        const result = await host.dmForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: workspaceOf(args, current),
           recipientMemberId: args.memberRef as AgentTeamMemberId, body: args.body })
         return { kind: 'dm-sent', recipientMemberId: result.recipient.memberId, recipientHandle: result.recipient.handle, delivered: true, occurredAt: result.receipt.occurredAt }
       } catch (error) {
@@ -503,7 +504,7 @@ const teamMessage = markAgentTeamPreset(defineTool({
     if ((args.threadRef === undefined && args.taskRef === undefined) || args.channelRef !== undefined || args.asTask !== undefined || typeof baseRevision !== 'number' || !Number.isSafeInteger(baseRevision) || baseRevision < 1) {
       throw new Error('reply requires threadRef and a positive baseRevision; drain the Thread with team_thread read and copy the token it renders, or reuse the one your own last committed mutation rendered')
     }
-    const result = await host.replyForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: current.workspaceId,
+    const result = await host.replyForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: workspaceOf(args, current),
       ...(args.threadRef === undefined ? {} : { threadRef: args.threadRef as AgentTeamThreadRef }),
       ...(args.taskRef === undefined ? {} : { taskRef: args.taskRef as AgentTeamTaskRef }),
       body: args.body, baseRevision, ...paths })
@@ -538,6 +539,7 @@ const teamClaim = defineTool({
     taskRef: { type: 'string', required: true, description: "Full branded Task ref exactly as returned by Team tools, including the 'task:' prefix. An unambiguous abbreviation of the first 6+ UUID hex characters also resolves." },
     baseRevision: { type: 'number', description: "The next-write token from your latest fully drained team_thread read (or your own last committed mutation) on this Task's Thread. Copy the explicitly rendered value verbatim; never increment, derive, compare, or cite it — it is an opaque concurrency token, not a fact about the Task." }, direction: { type: 'string' },
     claimRef: { type: 'string', description: "Full branded Claim ref exactly as returned by team_claim, including the 'claim:' prefix. An unambiguous abbreviation of the first 6+ UUID hex characters also resolves." },
+    workspace: workspaceParam,
   },
   output: {
     schema: { type: 'object', additionalProperties: false, properties: {
@@ -580,7 +582,7 @@ const teamClaim = defineTool({
     if (agent === undefined) throw new Error('team_claim requires an Agent session')
     const current = member(agent)
     const host = service(agent)
-    const base = { workspaceId: current.workspaceId, taskRef: args.taskRef as AgentTeamTaskRef }
+    const base = { workspaceId: workspaceOf(args, current), taskRef: args.taskRef as AgentTeamTaskRef }
     if (args.action === 'list') {
       if (args.baseRevision !== undefined || args.direction !== undefined || args.claimRef !== undefined) throw new Error('list accepts only taskRef')
       const listed = host.listClaimsForAgent(agent, base)
@@ -612,11 +614,12 @@ const teamView = defineTool({
   description: 'Discover your authorized Team addresses: current Channels, a newest-first page of top-level Threads (each with its bounded anchor subject; Task standing inline on taskful rows), and current Members. This is an address book, not a work queue — unread work lives in team_inbox, and a Thread is read with team_thread read. The cursor pages Thread rows only.',
   parameters: {
     channelRef: { type: 'string', description: "Full branded Channel ref exactly as returned by Team tools, including the 'channel:' prefix. An unambiguous abbreviation of the first 6+ UUID hex characters also resolves." },
-    limit: { type: 'number' }, cursor: { type: 'number' },
+    limit: { type: 'number' }, cursor: { type: 'number' }, workspace: workspaceParam,
   },
   output: {
     schema: { type: 'object', additionalProperties: false, properties: {
       channels: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: { channelRef: { type: 'string', required: true }, name: { type: 'string', required: true } } } },
+      workspaces: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: { workspaceId: { type: 'string', required: true }, title: { type: 'string' }, default: { type: 'boolean', required: true } } } },
       members: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: {
         memberId: { type: 'string', required: true }, kind: { type: 'string', required: true }, handle: { type: 'string', required: true }, description: { type: 'string', required: true }, presence: { type: 'string', required: true },
       } } },
@@ -647,6 +650,10 @@ const teamView = defineTool({
       if (value.threads.length === 0) lines.push(`No top-level Threads${!continuation && value.channels.length === 1 ? ` in ${value.channels[0]!.channelRef}` : ''} at this cursor.`)
       else lines.push(...value.threads.map(thread => `${thread.threadRef} · ${thread.channelRef}${thread.taskRef === undefined ? ' · taskless' : ` · ${taskStanding(thread)}`} — ${thread.subject}${thread.lastActivityAt === undefined ? '' : ` · last activity ${formatTeamTimestamp(thread.lastActivityAt)}`}`))
       lines.push(`Thread cursor ${value.cursor}; hasMore=${value.hasMore ? 'true' : 'false'}${value.hasMore ? ' — older Thread anchors exist; page again with this cursor.' : ' — no older Threads remain.'}`)
+      if (!continuation && value.workspaces.length > 1) {
+        lines.push('', 'Workspaces — you participate in')
+        lines.push(...value.workspaces.map(workspace => `${workspace.workspaceId}${workspace.title === undefined ? '' : ` · ${workspace.title}`}${workspace.default ? ' · default — your Session and cwd live here' : ' — address it with the workspace argument; file work needs absolute paths'}`))
+      }
       if (!continuation) {
         lines.push('', 'Members — current')
         if (value.members.length === 0) lines.push('No visible Members.')
@@ -660,9 +667,11 @@ const teamView = defineTool({
     if (agent === undefined) throw new Error('team_view requires an Agent session')
     const current = member(agent)
     const host = service(agent)
-    const view = host.viewForAgent(agent, { workspaceId: current.workspaceId, ...(args.channelRef === undefined ? {} : { channelRef: args.channelRef as never }), ...(args.limit === undefined ? {} : { limit: args.limit }), ...(args.cursor === undefined ? {} : { cursor: args.cursor }), topLevelOnly: true, includeActivities: false, direction: 'before' })
+    const view = host.viewForAgent(agent, { workspaceId: workspaceOf(args, current), ...(args.channelRef === undefined ? {} : { channelRef: args.channelRef as never }), ...(args.limit === undefined ? {} : { limit: args.limit }), ...(args.cursor === undefined ? {} : { cursor: args.cursor }), topLevelOnly: true, includeActivities: false, direction: 'before' })
     const visibleMemberIds = new Set(view.members.map(membership => membership.memberId))
     return {
+      workspaces: view.workspaces.map(participation => ({ workspaceId: participation.workspaceId,
+        ...(participation.title === undefined ? {} : { title: participation.title }), default: participation.default })),
       channels: view.channels.map(channel => ({ channelRef: channel.channelRef, name: channel.name })),
       members: [
         { memberId: view.humanMemberId, kind: 'human', handle: AGENT_TEAM_HUMAN_HANDLE, description: 'Human Team Member', presence: 'available' },
