@@ -132,17 +132,19 @@ describe('Agent Team shipping contract', () => {
       exports: Record<string, { default?: string }>
       dsh: { client: { platform: string; inject: string[] } }
     }
-    expect(bundleManifest.peerDependencies['@deepseek-ai/dsh-tool-web']).toBe('>=0.1.5-rc.1 <0.1.6')
-    expect(bundleManifest.peerDependencies['@deepseek-ai/dsh-command-compact']).toBe('>=0.1.5-rc.1 <0.1.6')
+    expect(bundleManifest.peerDependencies['@deepseek-ai/dsh-tool-web']).toBe('>=0.1.6-alpha.1 <0.1.7')
+    expect(bundleManifest.peerDependencies['@deepseek-ai/dsh-command-compact']).toBe('>=0.1.6-alpha.1 <0.1.7')
     // The certified baseline moves as one cut: every DSH peer carries the same
     // range, or an install resolves two DSH generations at once. The routed
-    // storage dependency stays deliberately wider: it is an ordinary
-    // dependency, so it is resolved with the framework line rather than
-    // pinning one certified cut.
+    // storage dependency keeps only a deliberately wider UPPER bound — it is an
+    // ordinary dependency, resolved with the framework line rather than pinned
+    // to one certified cut. Its lower bound still moves with the cut, because a
+    // lower bound left on the previous line resolves an older DSH storage
+    // generation beside the certified one.
     const dshPeerRanges = new Set(Object.entries(bundleManifest.peerDependencies)
       .filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
       .map(([, range]) => range))
-    expect([...dshPeerRanges]).toEqual(['>=0.1.5-rc.1 <0.1.6'])
+    expect([...dshPeerRanges]).toEqual(['>=0.1.6-alpha.1 <0.1.7'])
     expect(preset).toContain('compaction: true')
     expect(preset).toContain('toolResultPruner: true')
     expect(preset).toContain('team_inbox, team_thread, team_message, team_claim, and team_view')
@@ -207,7 +209,7 @@ describe('Agent Team shipping contract', () => {
     expect(manifest.files).toContain('packages/agent-team/lib/**/*')
     expect(manifest.files).toContain('packages/client-agent-team/lib/**/*')
     expect(manifest.name).toBe('@wowyuarm/dsh-agent-team')
-    expect(manifest.dependencies).toEqual({ '@deepseek-ai/dsh-storage-sqlite': '>=0.1.5-rc.1 <0.2.0', zod: '^4.4.3' })
+    expect(manifest.dependencies).toEqual({ '@deepseek-ai/dsh-storage-sqlite': '>=0.1.6-alpha.1 <0.2.0', zod: '^4.4.3' })
     expect(bundleManifest.dsh.client).toEqual({
       platform: 'web',
       // The Client half classifies a stream end with the Gateway's carrier-error
