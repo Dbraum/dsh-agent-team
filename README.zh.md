@@ -59,6 +59,8 @@ dsh plugin --profile web add @wowyuarm/dsh-agent-team
 dsh web
 ```
 
+不要从 DSH 源码 checkout 启动（`pnpm dsh web`）：源码模式会加载第二份 scope 模块，所有成员都会报 `selected preset is not team-enabled`。请始终使用编译产物启动。
+
 Agent Team 是显式 opt-in 的。安装只会把 bundle 加入 `web` profile，不会修改 Harness 安装，也不会修改 shipped defaults。
 
 ### 3. 验证并开始使用

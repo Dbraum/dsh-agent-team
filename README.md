@@ -59,6 +59,8 @@ dsh plugin --profile web add @wowyuarm/dsh-agent-team
 dsh web
 ```
 
+Do not start DSH from its source checkout (`pnpm dsh web`): source mode loads a second copy of the scope module, so every member reports `selected preset is not team-enabled`. Always start the compiled CLI.
+
 Agent Team is opt-in. Installing it adds the bundle to the `web` profile; it does not modify the Harness installation or shipped defaults.
 
 ### 3. Verify and try it
