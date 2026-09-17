@@ -27,6 +27,7 @@ import type {
   AgentTeamViewRequest,
 } from '@wowyuarm/dsh-agent-team/types'
 import agentTeamRemote from '@wowyuarm/dsh-agent-team/remote'
+import type {} from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
@@ -213,7 +214,12 @@ function applyUi(ctx: ClientContext): void {
     }
   }, 'agent-team: member session restore')
 
-  const changes = new TeamChangeStream((request, signal) => ctx.remote.agentTeam.changes(request, signal))
+  const changes = new TeamChangeStream(ctx.remote)
+  ctx.effect(() => () => changes.dispose(), 'agent-team: change subscriptions')
+  // The Harness resumes a live generation across reconnects, but a stream that
+  // already ended for good is this layer's to rebuild — and a new Host generation
+  // is the one moment the scope it was waiting for can be there again.
+  ctx.on('connection/reset', () => { changes.recover() })
   const reads = new TeamReadStream()
 
   const loadMemberGroups = async () => {
