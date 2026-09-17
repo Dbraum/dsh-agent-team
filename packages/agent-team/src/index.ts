@@ -1328,10 +1328,11 @@ export default class AgentTeam extends TypertRemoteService {
     return this.requireLedger().listClaims(actor, request)
   }
 
-  inboxForAgent(agent: Agent, request: AgentTeamInboxRequest): AgentTeamInbox {
+  inboxForAgent(agent: Agent, request: { readonly workspaceId?: WorkspaceId; readonly limit?: number }): AgentTeamInbox {
     const actor = this.memberActor(agent)
+    if (request.workspaceId === undefined) return this.requireLedger().memberInbox(actor, request)
     this.requireAgentWorkspace(actor, request.workspaceId)
-    return this.requireLedger().inbox(actor, request)
+    return this.requireLedger().inbox(actor, { ...request, workspaceId: request.workspaceId })
   }
 
   async readThreadForAgent(agent: Agent, request: AgentTeamThreadReadRequest): Promise<AgentTeamThreadReadResult> {
@@ -1414,7 +1415,7 @@ export default class AgentTeam extends TypertRemoteService {
     }
     try {
       const message = createUserMessage({
-        content: [{ type: 'text', text: this.dmRelayText(agent, recipient, request.body.trim(), result.value.receipt.occurredAt, result.value.receipt.operationId) }],
+        content: [{ type: 'text', text: this.dmRelayText(agent, recipient, request.body.trim(), result.value.receipt.occurredAt, result.value.receipt.operationId, request.workspaceId) }],
         source: { kind: 'plugin', plugin: AGENT_TEAM_PLUGIN_ID, form: 'relay' },
       })
       // An idle recipient gets one ordinary turn; a busy one is steered into
@@ -1428,18 +1429,27 @@ export default class AgentTeam extends TypertRemoteService {
   }
 
   /** Relay body: the DM itself plus one bounded line of adjacent context. */
-  private dmRelayText(senderAgent: Agent, recipient: AgentTeamAgentMember, body: string, occurredAt: string, excluding: AgentTeamOperationId): string {
+  private dmRelayText(senderAgent: Agent, recipient: AgentTeamAgentMember, body: string, occurredAt: string, excluding: AgentTeamOperationId, workspaceId: WorkspaceId): string {
     const sender = this.memberForAgent(senderAgent)
     const prior = this.requireLedger().dmHistoryBetween(senderAgent.id, recipient.memberId, excluding)
     const header = `Direct message from @${sender?.handle ?? 'a Team Member'} at ${formatTeamTimestamp(occurredAt)}:`
     const context = prior === undefined ? '' : `\n\n[most recent prior DM between you: ${prior}]`
-    return `${header}\n\n${body}${context}`
+    return `${header}\nWorkspace: ${workspaceId}\n\n${body}${context}`
   }
 
   threadHistoryForAgent(agent: Agent, request: AgentTeamThreadHistoryRequest): AgentTeamThreadHistory {
     const actor = this.memberActor(agent)
     this.requireAgentWorkspace(actor, request.workspaceId)
     return this.requireLedger().threadHistory(actor, request)
+  }
+
+  /** Live participation addresses; paths remain owned by the Harness registry. */
+  workspacesForAgent(agent: Agent): readonly { readonly workspaceId: WorkspaceId; readonly path: string | undefined; readonly default: boolean }[] {
+    const actor = this.memberActor(agent)
+    const member = this.requireLedger().getMember(actor.memberId)!
+    return Object.freeze(this.requireLedger().workspacesOf(actor.memberId).map(workspaceId => Object.freeze({
+      workspaceId, path: this.ctx.workspaceRegistry.get(workspaceId)?.path, default: workspaceId === member.workspaceId,
+    })))
   }
 
   /** Agent-only bounded discovery projection; participation list carries registry titles when known. */
@@ -2584,6 +2594,22 @@ export default class AgentTeam extends TypertRemoteService {
     }
     const ledger = this.requireLedger()
     this.emitChanged(ledger.changeScopesOf(operation))
+    if (operation.kind === 'team/member-workspace-joined' || operation.kind === 'team/member-workspace-left') {
+      const agent = this.handles.get(operation.data.memberId)?.agent
+      if (agent !== undefined) {
+        const path = this.ctx.workspaceRegistry.get(operation.data.workspaceId)?.path
+        const text = `Team participation changed: you have ${operation.kind === 'team/member-workspace-joined' ? 'joined' : 'left'} Workspace ${operation.data.workspaceId}${path === undefined ? ' (path unavailable)' : ` (${JSON.stringify(path)})`}.\nCurrent Workspace ids: ${ledger.workspacesOf(operation.data.memberId).join(', ')}. This replaces earlier participation information. Your Session and cwd have not moved.`
+        const notice = createUserMessage({ content: [{ type: 'text', text }],
+          source: { kind: 'plugin', plugin: AGENT_TEAM_PLUGIN_ID, form: 'notice', summary: 'Team Workspace participation changed' } })
+        try {
+          if (agent.status === 'idle' || agent.inbox.nextTurn.some(message => message.source.kind === 'user')) agent.followup(notice)
+          else agent.steer(notice)
+        } catch (error) {
+          // Notification delivery cannot roll back a committed participation.
+          this.ctx.logger.warn(`agent-team: participation notice not delivered: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+    }
     for (const memberId of ledger.affectedMembersOf(operation)) {
       const handle = this.handles.get(memberId)
       if (handle !== undefined) this.notifyMember(handle.agent)
@@ -2636,9 +2662,7 @@ export default class AgentTeam extends TypertRemoteService {
 
   /** Inbox facts across every Workspace the Member participates in — participation is the reachability set. */
   private memberNotificationFacts(member: AgentTeamAgentMember): ReturnType<AgentTeamLedger['notificationFacts']> {
-    const ledger = this.requireLedger()
-    return Object.freeze(ledger.workspacesOf(member.memberId)
-      .flatMap(workspaceId => ledger.notificationFacts(member.memberId, { workspaceId })))
+    return this.requireLedger().notificationFacts(member.memberId)
   }
 
   /** Wake from durable unread state with bounded facts for direct and state-changing work. */
@@ -2716,6 +2740,7 @@ export default class AgentTeam extends TypertRemoteService {
       return true
     }
     for (const { item, facts } of notifications.slice(0, 8)) {
+      if (!append(`Workspace: ${item.workspaceId}\nChannel: ${item.channelRef}`)) break
       for (const { fact, direct } of facts) {
         if (detailedFactCount >= 20) {
           omitted = true
@@ -2741,7 +2766,7 @@ export default class AgentTeam extends TypertRemoteService {
       }
     }
     if (omitted) sections.push('More unread work remains in team_inbox; the automatic context is bounded.')
-    sections.push('Use team_thread read with the relevant threadRef before acting or replying. Use team_inbox only when you need to triage the remaining Threads.')
+    sections.push('Use team_thread read with the relevant workspace and threadRef before acting or replying. Use team_inbox only when you need to triage the remaining Threads.')
     return sections.join('\n\n')
   }
 

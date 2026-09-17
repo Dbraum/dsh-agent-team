@@ -25,17 +25,21 @@ export function member(agent: TeamToolAgent) {
   return current
 }
 
-/**
- * Shared optional Workspace selector for every Team tool: the absolute path
- * or id of a Workspace the Member participates in. Omitted targets the
- * Member's default Workspace — where its Session and cwd live.
- */
+/** A collaboration address, never a cwd or Session switch. */
 export const workspaceParam = {
   type: 'string' as const,
-  description: 'Target Workspace — the id exactly as team_view lists it under `workspaces`. Omit to use your default Workspace (where your Session and cwd live). Required when you participate in more than one Workspace.',
+  description: 'Target Workspace id exactly as listed in your participation context or team_view. Required when you participate in more than one Workspace; only a sole participation can be inferred. This does not change your Session cwd.',
 }
 
-/** Resolve the optional `workspace` argument; participation itself is enforced Host-side for every op. */
-export function workspaceOf(args: { workspace?: string | undefined }, current: { workspaceId: WorkspaceId }): WorkspaceId {
-  return (args.workspace === undefined ? current.workspaceId : args.workspace) as WorkspaceId
+/** Reject ambiguous routing before a tool reads facts or attempts a mutation. */
+export function workspaceOf(args: { workspace?: string | undefined }, agent: TeamToolAgent): WorkspaceId {
+  const workspaces = service(agent).workspacesForAgent(agent)
+  const choices = workspaces.map(workspace => workspace.workspaceId).join(', ')
+  if (args.workspace === undefined) {
+    if (workspaces.length !== 1) throw new Error(`workspace is required when participating in multiple Workspaces. Choose: ${choices}`)
+    return workspaces[0]!.workspaceId
+  }
+  const selected = workspaces.find(workspace => workspace.workspaceId === args.workspace)
+  if (selected === undefined) throw new Error(`Not participating in Workspace '${args.workspace}'. Choose: ${choices}`)
+  return selected.workspaceId
 }

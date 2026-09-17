@@ -1472,7 +1472,17 @@ export class AgentTeamLedger {
 
   inbox(actor: AgentTeamHumanActor | AgentTeamMemberActor, request: AgentTeamInboxRequest): AgentTeamInbox {
     const authorized = this.assertActorForWorkspace(actor, request.workspaceId)
-    const limit = request.limit ?? 50
+    return this.inboxForWorkspaces(authorized, [request.workspaceId], request.limit)
+  }
+
+  memberInbox(actor: AgentTeamMemberActor, request: { readonly limit?: number }): AgentTeamInbox {
+    const workspaces = this.workspacesOf(actor.memberId)
+    for (const workspaceId of workspaces) this.assertActorForWorkspace(actor, workspaceId)
+    return this.inboxForWorkspaces(actor, workspaces, request.limit)
+  }
+
+  private inboxForWorkspaces(authorized: AgentTeamHumanActor | AgentTeamMemberActor, workspaceIds: readonly WorkspaceId[], requestedLimit?: number): AgentTeamInbox {
+    const limit = requestedLimit ?? 50
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('inbox limit must be an integer between 1 and 100')
     // One unread slice serves every reader: Threads the reader follows or
     // holds a marker on, admitted whenever they hold an unread fact — mentions
@@ -1485,7 +1495,7 @@ export class AgentTeamLedger {
     // A Human reader additionally receives the separate 「最近活跃」 slice below;
     // `items` stays exactly the unread queue for every reader, so the badge
     // totals and the agent-facing `team_inbox` result cannot drift with it.
-    const taskNumbers = this.taskNumbers(request.workspaceId)
+    const taskNumbers = new Map(workspaceIds.flatMap(workspaceId => [...this.taskNumbers(workspaceId)]))
     const items: AgentTeamInboxItem[] = []
     const unreadThreads = new Set<AgentTeamThreadRef>()
     for (const threadRef of this.inboxCandidateThreads(authorized.memberId)) {
@@ -1493,7 +1503,8 @@ export class AgentTeamLedger {
       if (thread === undefined) continue
       const channelRef = this.channelRefForThread(thread.threadRef)
       if (channelRef === undefined) continue
-      if (this.state.channels.get(channelRef)?.workspaceId !== request.workspaceId) continue
+      const workspaceId = this.state.channels.get(channelRef)?.workspaceId
+      if (workspaceId === undefined || !workspaceIds.includes(workspaceId)) continue
       if (authorized.kind === 'member' && !this.isChannelMember(channelRef, authorized.memberId)) continue
       const unread = this.unreadFor(authorized.memberId, thread.threadRef)
       if (unread.length === 0) continue
@@ -1506,7 +1517,7 @@ export class AgentTeamLedger {
       // observe a different commit between the two reads.
       const newest = unread.at(-1)!.fact
       const taskNumber = task === undefined ? undefined : taskNumbers.get(task.taskRef)
-      items.push(Object.freeze({ channelRef,
+      items.push(Object.freeze({ workspaceId, channelRef,
         channelName: this.state.channels.get(channelRef)?.name ?? '',
         ...(task === undefined ? {} : { task }), ...(taskNumber === undefined ? {} : { taskNumber }), thread,
         unreadCount: unread.length, directCount,
@@ -1518,7 +1529,7 @@ export class AgentTeamLedger {
     items.sort((left, right) => right.directCount - left.directCount || right.newestSequence - left.newestSequence || left.thread.threadRef.localeCompare(right.thread.threadRef))
     const selected = items.slice(0, limit)
     const recent = authorized.kind === 'human'
-      ? this.recentInboxItems(authorized.memberId, request.workspaceId, unreadThreads, taskNumbers)
+      ? this.recentInboxItems(authorized.memberId, workspaceIds[0]!, unreadThreads, taskNumbers)
       : Object.freeze([] as AgentTeamInboxItem[])
     return Object.freeze({ items: Object.freeze(selected), recent,
       totalUnreadCount: items.reduce((sum, item) => sum + item.unreadCount, 0),
@@ -1589,7 +1600,7 @@ export class AgentTeamLedger {
       if (newest === undefined) continue
       const task = thread.taskRef === undefined ? undefined : this.state.tasks.get(thread.taskRef)
       const taskNumber = task === undefined ? undefined : taskNumbers.get(task.taskRef)
-      recent.push(Object.freeze({ channelRef,
+      recent.push(Object.freeze({ workspaceId, channelRef,
         channelName: this.state.channels.get(channelRef)?.name ?? '',
         ...(task === undefined ? {} : { task }), ...(taskNumber === undefined ? {} : { taskNumber }), thread,
         unreadCount: 0, directCount: 0,
@@ -1616,13 +1627,14 @@ export class AgentTeamLedger {
   }
 
   /** Model-visible notification material derived from the recipient's current durable unread state. */
-  notificationFacts(memberId: AgentTeamMemberId, request: AgentTeamInboxRequest): readonly {
+  notificationFacts(memberId: AgentTeamMemberId, request?: AgentTeamInboxRequest): readonly {
     readonly item: AgentTeamInboxItem
     readonly facts: readonly AgentTeamThreadReadFact[]
   }[] {
     const member = this.requireMember(memberId)
-    if (!this.participatesIn(memberId, request.workspaceId)) throw new Error('Member cannot inspect another Workspace')
-    const inbox = this.inbox({ kind: 'member', memberId, handle: member.handle }, request)
+    if (request !== undefined && !this.participatesIn(memberId, request.workspaceId)) throw new Error('Member cannot inspect another Workspace')
+    const actor = { kind: 'member' as const, memberId, handle: member.handle }
+    const inbox = request === undefined ? this.memberInbox(actor, {}) : this.inbox(actor, request)
     return Object.freeze(inbox.items.map(item => Object.freeze({ item,
       facts: this.unreadFor(memberId, item.thread.threadRef) })))
   }

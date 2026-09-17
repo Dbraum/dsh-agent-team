@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import AgentTeam, { AGENT_TEAM_HUMAN_HANDLE, AgentTeamDmDeliveryError, markAgentTeamPreset } from '@wowyuarm/dsh-agent-team/host'
 import { formatTeamTimestamp } from '@wowyuarm/dsh-agent-team/time-format'
 import { registerContextTools } from './context-tools.ts'
-import { member, service, workspaceOf, workspaceParam } from './host-access.ts'
+import { service, workspaceOf, workspaceParam } from './host-access.ts'
 import type {
   AgentTeamClaimRef,
   AgentTeamMemberId,
@@ -187,13 +187,13 @@ function rejectionLines(
 
 const teamInbox = defineTool({
   name: 'team_inbox',
-  description: 'List your bounded Team Inbox for triage: unread Thread summaries with counts, without message bodies and without marking anything read. Read a selected Thread with team_thread read; the inbox itself authorizes no mutation.',
-  parameters: { limit: { type: 'number' }, workspace: workspaceParam },
+  description: 'List your bounded Team Inbox across all joined Workspaces for triage: unread Thread summaries with counts, without message bodies and without marking anything read. Read a selected Thread with team_thread read; the inbox itself authorizes no mutation.',
+  parameters: { limit: { type: 'number' }, workspace: { type: 'string', description: 'Optional Workspace id filter. Omit to triage all your participations together.' } },
   output: {
     schema: { type: 'object', additionalProperties: false, properties: {
       totalUnreadCount: { type: 'number', required: true }, totalDirectCount: { type: 'number', required: true },
       items: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: {
-        threadRef: { type: 'string', required: true }, channelRef: { type: 'string', required: true },
+        workspaceId: { type: 'string', required: true }, threadRef: { type: 'string', required: true }, channelRef: { type: 'string', required: true },
         taskRef: { type: 'string' }, status: { type: 'string' }, revision: { type: 'number', required: true }, unreadCount: { type: 'number', required: true }, directCount: { type: 'number', required: true },
         taskNumber: { type: 'number' }, newestOccurredAt: { type: 'string' },
       } } },
@@ -212,7 +212,7 @@ const teamInbox = defineTool({
       const shown = value.items.reduce((sum, item) => sum + item.unreadCount, 0)
       return [{ type: 'text', text: [
         `Inbox — ${value.totalUnreadCount} unread update(s) total, ${value.totalDirectCount} direct, across ${value.items.length} Thread(s) shown${value.totalUnreadCount > shown ? `; ${value.totalUnreadCount - shown} more on Threads beyond this bounded list — call again with a larger limit.` : '.'}`,
-        ...value.items.map(item => `${item.threadRef}${item.channelRef === undefined ? '' : ` · ${item.channelRef}`}${item.taskRef === undefined ? '' : ` · ${taskStanding(item)}`} · ${item.unreadCount} unread, ${item.directCount} direct${item.newestOccurredAt === undefined ? '' : ` · newest ${formatTeamTimestamp(item.newestOccurredAt)}`}`),
+        ...value.items.map(item => `${item.workspaceId} · ${item.threadRef}${item.channelRef === undefined ? '' : ` · ${item.channelRef}`}${item.taskRef === undefined ? '' : ` · ${taskStanding(item)}`} · ${item.unreadCount} unread, ${item.directCount} direct${item.newestOccurredAt === undefined ? '' : ` · newest ${formatTeamTimestamp(item.newestOccurredAt)}`}`),
         'Read a selected Thread with team_thread read. Listing changes no read state and supplies no write token.',
       ].join('\n') }]
     },
@@ -220,16 +220,13 @@ const teamInbox = defineTool({
   async execute(args, exec) {
     const agent = exec.agent
     if (agent === undefined) throw new Error('team_inbox requires an Agent session')
-    const current = member(agent)
     const host = service(agent)
-    const inbox = host.inboxForAgent(agent, { workspaceId: workspaceOf(args, current), ...(args.limit === undefined ? {} : { limit: args.limit }) })
-    const taskNumbers = new Map(host.viewForAgent(agent, { workspaceId: workspaceOf(args, current), topLevelOnly: true, includeActivities: false, direction: 'before' })
-      .taskNumbers.map(entry => [entry.taskRef, entry.taskNumber] as const))
+    const inbox = host.inboxForAgent(agent, { ...(args.workspace === undefined ? {} : { workspaceId: workspaceOf(args, agent) }), ...(args.limit === undefined ? {} : { limit: args.limit }) })
     return {
       totalUnreadCount: inbox.totalUnreadCount, totalDirectCount: inbox.totalDirectCount,
       items: inbox.items.map(item => {
-        const taskNumber = item.task === undefined ? undefined : taskNumbers.get(item.task.taskRef)
-        return { threadRef: item.thread.threadRef, channelRef: item.channelRef,
+        const taskNumber = item.taskNumber
+        return { workspaceId: item.workspaceId, threadRef: item.thread.threadRef, channelRef: item.channelRef,
           ...(item.task === undefined ? {} : { taskRef: item.task.taskRef, status: item.task.status }),
           revision: item.thread.revision, unreadCount: item.unreadCount, directCount: item.directCount, newestOccurredAt: item.newestOccurredAt,
           ...(taskNumber === undefined ? {} : { taskNumber }) }
@@ -249,6 +246,7 @@ const teamThread = defineTool({
   },
   output: {
     schema: { type: 'object', additionalProperties: false, properties: {
+      workspaceId: { type: 'string', required: true }, channelRef: { type: 'string', required: true },
       kind: { type: 'string', required: true }, threadRef: { type: 'string', required: true }, taskRef: { type: 'string' },
       revision: { type: 'number', required: true }, status: { type: 'string' }, resolution: { type: 'string' }, taskNumber: { type: 'number' },
       following: { type: 'boolean', required: true }, readThroughSequence: { type: 'number' }, remainingUnreadCount: { type: 'number' }, earlierFactCount: { type: 'number' }, cursor: { type: 'number' }, hasMore: { type: 'boolean' },
@@ -274,15 +272,16 @@ const teamThread = defineTool({
     // current collision surface or any write token.
     render: (args, value) => {
       const standing = taskStanding(value)
+      const source = `Workspace: ${value.workspaceId} · Channel: ${value.channelRef}`
       if (value.kind === 'status') {
-        return [{ type: 'text', text: `Attention status — ${value.following ? 'following' : 'not following'} ${value.threadRef}${standing === '' ? '' : ` · ${standing}`}.` }]
+        return [{ type: 'text', text: `${source}\nAttention status — ${value.following ? 'following' : 'not following'} ${value.threadRef}${standing === '' ? '' : ` · ${standing}`}.` }]
       }
       if (value.kind === 'follow' || value.kind === 'unfollow') {
-        return [{ type: 'text', text: `Attention changed — ${value.following ? 'now following' : 'no longer following'} ${value.threadRef}${standing === '' ? '' : ` · ${standing}`}.` }]
+        return [{ type: 'text', text: `${source}\nAttention changed — ${value.following ? 'now following' : 'no longer following'} ${value.threadRef}${standing === '' ? '' : ` · ${standing}`}.` }]
       }
       if (value.kind === 'history') {
         const facts = value.facts as FactView[]
-        const lines = [`History for ${value.threadRef}${standing === '' ? '' : ` · ${standing}`}`]
+        const lines = [source, `History for ${value.threadRef}${standing === '' ? '' : ` · ${standing}`}`]
         // First page (no beforeSequence supplied) orients on the full
         // anchor; a continuation orients on the shared bounded subject. An
         // anchor already selected as a fact never repeats.
@@ -304,6 +303,7 @@ const teamThread = defineTool({
       // A read with nothing unread writes no durable operation, so the opening
       // line claims a commit only when unread facts were actually acknowledged.
       const lines = [
+        source,
         acknowledged === 0
           ? `Read — no unread updates on ${value.threadRef}; nothing remains.`
           : `Read committed — acknowledged ${acknowledged} unread update(s) on ${value.threadRef}; ${remaining} remain.`,
@@ -341,10 +341,9 @@ const teamThread = defineTool({
   async execute(args, exec) {
     const agent = exec.agent
     if (agent === undefined) throw new Error('team_thread requires an Agent session')
-    const current = member(agent)
     const host = service(agent)
     if (args.threadRef === undefined && args.taskRef === undefined) throw new Error('team_thread requires threadRef')
-    const base = { workspaceId: workspaceOf(args, current), ...(args.threadRef === undefined ? {} : { threadRef: args.threadRef as AgentTeamThreadRef }), ...(args.taskRef === undefined ? {} : { taskRef: args.taskRef as AgentTeamTaskRef }) }
+    const base = { workspaceId: workspaceOf(args, agent), ...(args.threadRef === undefined ? {} : { threadRef: args.threadRef as AgentTeamThreadRef }), ...(args.taskRef === undefined ? {} : { taskRef: args.taskRef as AgentTeamTaskRef }) }
     const taskNumberOf = (task: { taskRef: AgentTeamTaskRef } | undefined): { taskNumber?: number } => {
       if (task === undefined) return {}
       const resolved = host.resolveTaskRefs({ workspaceId: base.workspaceId, taskRefs: [task.taskRef] }).resolved[0]
@@ -354,24 +353,24 @@ const teamThread = defineTool({
       if (args.beforeSequence !== undefined || args.limit !== undefined) throw new Error('status does not accept history arguments')
       const status = host.attentionStatusForAgent(agent, base)
       const snapshot = host.threadHistoryForAgent(agent, { ...base, beforeSequence: 1, limit: 1 })
-      return threadResult('status', snapshot, status.attention, [], taskNumberOf(snapshot.task))
+      return threadResult('status', base.workspaceId, snapshot, status.attention, [], taskNumberOf(snapshot.task))
     }
     if (args.action === 'follow' || args.action === 'unfollow') {
       if (args.beforeSequence !== undefined || args.limit !== undefined) throw new Error(`${args.action} does not accept history arguments`)
       const result = await host.changeAttentionForAgent(agent, { requestId: requestId(agent.id, exec.callId), ...base, action: args.action })
       const snapshot = host.threadHistoryForAgent(agent, { ...base, beforeSequence: 1, limit: 1 })
-      return threadResult(args.action, snapshot, result.attention, [], taskNumberOf(snapshot.task))
+      return threadResult(args.action, base.workspaceId, snapshot, result.attention, [], taskNumberOf(snapshot.task))
     }
     if (args.action === 'history') {
       const history = host.threadHistoryForAgent(agent, { ...base, ...(args.beforeSequence === undefined ? {} : { beforeSequence: args.beforeSequence }), ...(args.limit === undefined ? {} : { limit: args.limit }) })
       const status = host.attentionStatusForAgent(agent, base)
-      return threadResult('history', history, status.attention, history.facts.map(fact => fact.kind === 'message'
+      return threadResult('history', base.workspaceId, history, status.attention, history.facts.map(fact => fact.kind === 'message'
           ? { sequence: fact.sequence, kind: 'message', body: fact.message.body, sender: fact.message.sender, mentions: [...fact.mentions], occurredAt: fact.occurredAt }
           : activityFactView(fact.sequence, fact.activity, undefined, fact.occurredAt)), { cursor: history.cursor, hasMore: history.hasMore, ...taskNumberOf(history.task) })
     }
     if (args.beforeSequence !== undefined || args.limit !== undefined) throw new Error('read does not accept history arguments')
     const read = await host.readThreadForAgent(agent, { requestId: requestId(agent.id, exec.callId), ...base })
-    return threadResult('read', read, read.attention, read.facts.map(entry => entry.fact.kind === 'message'
+    return threadResult('read', base.workspaceId, read, read.attention, read.facts.map(entry => entry.fact.kind === 'message'
         ? { sequence: entry.fact.sequence, kind: 'message', body: entry.fact.message.body, sender: entry.fact.message.sender, mentions: [...entry.fact.mentions], unread: entry.unread, direct: entry.direct, occurredAt: entry.fact.occurredAt }
         : activityFactView(entry.fact.sequence, entry.fact.activity, { unread: entry.unread, direct: entry.direct }, entry.fact.occurredAt)), { readThroughSequence: read.readThroughSequence, remainingUnreadCount: read.remainingUnreadCount, ...(read.earlierFactCount === undefined ? {} : { earlierFactCount: read.earlierFactCount }), ...(read.contextAdvice === undefined ? {} : { contextAdvice: adviceView(read.contextAdvice) }), ...taskNumberOf(read.task) })
   },
@@ -392,12 +391,14 @@ function claimLine(claim: { claimRef: string; owner: string; direction: string }
 
 function threadResult(
   kind: 'status' | 'follow' | 'unfollow' | 'read' | 'history',
+  workspaceId: string,
   snapshot: Awaited<ReturnType<AgentTeam['readThreadForAgent']>> | ReturnType<AgentTeam['threadHistoryForAgent']>,
   attention: Awaited<ReturnType<AgentTeam['readThreadForAgent']>>['attention'],
   facts: FactView[],
   extra: { cursor?: number; hasMore?: boolean; readThroughSequence?: number; remainingUnreadCount?: number; earlierFactCount?: number; contextAdvice?: ContextAdviceView; taskNumber?: number } = {},
-): { anchor: { messageRef: string; sender: string; body: string; sequence: number; occurredAt?: string }; threadRef: string; revision: number; kind: string; following: boolean; taskRef?: string; status?: string; resolution?: string; taskNumber?: number; readThroughSequence?: number; remainingUnreadCount?: number; earlierFactCount?: number; cursor?: number; hasMore?: boolean; claims: ClaimView[]; facts: FactView[]; contextAdvice?: ContextAdviceView } {
+): { workspaceId: string; channelRef: string; anchor: { messageRef: string; sender: string; body: string; sequence: number; occurredAt?: string }; threadRef: string; revision: number; kind: string; following: boolean; taskRef?: string; status?: string; resolution?: string; taskNumber?: number; readThroughSequence?: number; remainingUnreadCount?: number; earlierFactCount?: number; cursor?: number; hasMore?: boolean; claims: ClaimView[]; facts: FactView[]; contextAdvice?: ContextAdviceView } {
   return {
+    workspaceId, channelRef: snapshot.anchor.channelRef,
     kind, threadRef: snapshot.thread.threadRef, revision: snapshot.thread.revision,
     ...(snapshot.task === undefined ? {} : { taskRef: snapshot.task.taskRef, status: snapshot.task.status, resolution: snapshot.task.resolution }),
     ...(extra.taskNumber === undefined ? {} : { taskNumber: extra.taskNumber }),
@@ -473,14 +474,13 @@ const teamMessage = markAgentTeamPreset(defineTool({
   async execute(args, exec) {
     const agent = exec.agent
     if (agent === undefined) throw new Error('team_message requires an Agent session')
-    const current = member(agent)
     const host = service(agent)
     const rawPaths = args.attachments
     const attachmentPaths = Array.isArray(rawPaths) ? rawPaths.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '') : undefined
     const paths = attachmentPaths !== undefined && attachmentPaths.length > 0 ? { attachmentPaths } : {}
     if (args.action === 'start') {
       if (args.channelRef === undefined || args.taskRef !== undefined || args.threadRef !== undefined || args.baseRevision !== undefined) throw new Error('start requires channelRef and does not accept threadRef, taskRef, or baseRevision')
-      const result = await host.sendMessageForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: workspaceOf(args, current),
+      const result = await host.sendMessageForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: workspaceOf(args, agent),
         channelRef: args.channelRef as never, body: args.body, asTask: args.asTask === true, ...paths })
       return messageOutcome(result, 'start')
     }
@@ -490,7 +490,7 @@ const teamMessage = markAgentTeamPreset(defineTool({
         throw new Error('dm requires memberRef and body only; it does not accept channelRef, threadRef, taskRef, baseRevision, asTask, or attachments')
       }
       try {
-        const result = await host.dmForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: workspaceOf(args, current),
+        const result = await host.dmForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: workspaceOf(args, agent),
           recipientMemberId: args.memberRef as AgentTeamMemberId, body: args.body })
         return { kind: 'dm-sent', recipientMemberId: result.recipient.memberId, recipientHandle: result.recipient.handle, delivered: true, occurredAt: result.receipt.occurredAt }
       } catch (error) {
@@ -504,7 +504,7 @@ const teamMessage = markAgentTeamPreset(defineTool({
     if ((args.threadRef === undefined && args.taskRef === undefined) || args.channelRef !== undefined || args.asTask !== undefined || typeof baseRevision !== 'number' || !Number.isSafeInteger(baseRevision) || baseRevision < 1) {
       throw new Error('reply requires threadRef and a positive baseRevision; drain the Thread with team_thread read and copy the token it renders, or reuse the one your own last committed mutation rendered')
     }
-    const result = await host.replyForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: workspaceOf(args, current),
+    const result = await host.replyForAgent(agent, { requestId: requestId(agent.id, exec.callId), workspaceId: workspaceOf(args, agent),
       ...(args.threadRef === undefined ? {} : { threadRef: args.threadRef as AgentTeamThreadRef }),
       ...(args.taskRef === undefined ? {} : { taskRef: args.taskRef as AgentTeamTaskRef }),
       body: args.body, baseRevision, ...paths })
@@ -580,9 +580,8 @@ const teamClaim = defineTool({
   async execute(args, exec) {
     const agent = exec.agent
     if (agent === undefined) throw new Error('team_claim requires an Agent session')
-    const current = member(agent)
     const host = service(agent)
-    const base = { workspaceId: workspaceOf(args, current), taskRef: args.taskRef as AgentTeamTaskRef }
+    const base = { workspaceId: workspaceOf(args, agent), taskRef: args.taskRef as AgentTeamTaskRef }
     if (args.action === 'list') {
       if (args.baseRevision !== undefined || args.direction !== undefined || args.claimRef !== undefined) throw new Error('list accepts only taskRef')
       const listed = host.listClaimsForAgent(agent, base)
@@ -619,6 +618,7 @@ const teamView = defineTool({
   output: {
     schema: { type: 'object', additionalProperties: false, properties: {
       channels: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: { channelRef: { type: 'string', required: true }, name: { type: 'string', required: true } } } },
+      workspaceId: { type: 'string', required: true },
       workspaces: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: { workspaceId: { type: 'string', required: true }, title: { type: 'string' }, default: { type: 'boolean', required: true } } } },
       members: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: {
         memberId: { type: 'string', required: true }, kind: { type: 'string', required: true }, handle: { type: 'string', required: true }, description: { type: 'string', required: true }, presence: { type: 'string', required: true },
@@ -639,7 +639,7 @@ const teamView = defineTool({
     // which is reading, never writing from a directory snapshot.
     render: (_args, value) => {
       const continuation = value.page === 'threads'
-      const lines: string[] = []
+      const lines: string[] = [`Workspace: ${value.workspaceId}`]
       if (!continuation) {
         lines.push('Team directory', '', 'Channels — current')
         if (value.channels.length === 0) lines.push('No authorized Channels.')
@@ -665,11 +665,12 @@ const teamView = defineTool({
   async execute(args, exec) {
     const agent = exec.agent
     if (agent === undefined) throw new Error('team_view requires an Agent session')
-    const current = member(agent)
     const host = service(agent)
-    const view = host.viewForAgent(agent, { workspaceId: workspaceOf(args, current), ...(args.channelRef === undefined ? {} : { channelRef: args.channelRef as never }), ...(args.limit === undefined ? {} : { limit: args.limit }), ...(args.cursor === undefined ? {} : { cursor: args.cursor }), topLevelOnly: true, includeActivities: false, direction: 'before' })
+    const workspaceId = workspaceOf(args, agent)
+    const view = host.viewForAgent(agent, { workspaceId, ...(args.channelRef === undefined ? {} : { channelRef: args.channelRef as never }), ...(args.limit === undefined ? {} : { limit: args.limit }), ...(args.cursor === undefined ? {} : { cursor: args.cursor }), topLevelOnly: true, includeActivities: false, direction: 'before' })
     const visibleMemberIds = new Set(view.members.map(membership => membership.memberId))
     return {
+      workspaceId,
       workspaces: view.workspaces.map(participation => ({ workspaceId: participation.workspaceId,
         ...(participation.title === undefined ? {} : { title: participation.title }), default: participation.default })),
       channels: view.channels.map(channel => ({ channelRef: channel.channelRef, name: channel.name })),

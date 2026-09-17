@@ -272,7 +272,8 @@ async function realHarness(
 
 describe('Agent Team Member lifecycle', () => {
   it('works in a joined Workspace through the existing live Session and withdraws without disposing it', async () => {
-    const { ctx, workspaceId, project, root, workspaces, archived } = await realHarness()
+    const adapter = new ScriptedAdapter()
+    const { ctx, workspaceId, project, root, workspaces, archived } = await realHarness(adapter)
     const otherId = WorkspaceId('workspace:joined')
     workspaces.set(otherId, { id: otherId, path: join(root, 'other-project'), attachSession: async () => {} })
     const added = await ctx.agentTeam.addMember({ requestId: requestId('global-add'), workspaceId,
@@ -282,6 +283,28 @@ describe('Agent Team Member lifecycle', () => {
     const agent = ctx.agents.get(added.status.member.sessionId)!
     await ctx.agentTeam.joinWorkspace({ requestId: requestId('global-join'), workspaceId: otherId, memberId })
     expect(ctx.agentTeam.membersForClient({ workspaceId: otherId }).map(status => status.member.memberId)).toEqual([memberId])
+    // The committed join wakes the idle Member once; the notice names the Workspace and the unchanged Session.
+    adapter.enqueue(textResponse('Acknowledged the participation change.'))
+    await agent.whenIdle()
+    expect(adapter.requests).toHaveLength(1)
+    const noticeRequest = JSON.stringify(adapter.requests[0]!.messages)
+    expect(noticeRequest).toContain('Team participation changed')
+    expect(noticeRequest).toContain(otherId)
+    expect(noticeRequest).toContain('Your Session and cwd have not moved')
+    for (const [name, args] of [
+      ['team_view', {}],
+      ['team_thread', { action: 'status', threadRef: 'thread:missing' }],
+      ['team_message', { action: 'start', channelRef: 'channel:missing', body: 'Do not route implicitly' }],
+      ['team_claim', { action: 'list', taskRef: 'task:missing' }],
+    ] as const) {
+      const omitted = await ctx.tools.execute({ signal: new AbortController().signal, callId: ToolCallId(`global-missing-${name}`),
+        name, arguments: args, agent })
+      expect(omitted.isError).toBe(true)
+      if (!omitted.isError) throw new Error('Expected an explicit Workspace requirement')
+      expect(omitted.error.message).toContain('workspace is required')
+      expect(omitted.error.message).toContain(workspaceId)
+      expect(omitted.error.message).toContain(otherId)
+    }
     const channel = await ctx.agentTeam.createChannel({ requestId: requestId('global-channel'), workspaceId: otherId,
       name: 'work', description: '', memberIds: [memberId] })
     const result = await ctx.tools.execute({ signal: new AbortController().signal, callId: ToolCallId('global-start'),
@@ -1073,7 +1096,7 @@ describe('Agent Team Member lifecycle', () => {
     expect(request).toContain('starter')
     expect(request).toContain(started.threadRef)
     expect(request).not.toContain('Task undefined')
-    expect(request).toContain('relevant threadRef')
+    expect(request).toContain('relevant workspace and threadRef')
     expect(request).toMatch(/Occurred at: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00/)
   })
 

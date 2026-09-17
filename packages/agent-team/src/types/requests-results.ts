@@ -567,6 +567,7 @@ export interface AgentTeamInboxActor {
 
 /** One Thread summary containing no Message bodies. */
 export interface AgentTeamInboxItem {
+  readonly workspaceId: WorkspaceId
   readonly channelRef: AgentTeamChannelRef
   /** The owning Channel's display name, so a row renders without a per-row Channel view. */
   readonly channelName?: string

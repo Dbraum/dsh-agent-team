@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -34,7 +35,8 @@ export function apply(ctx: Context): void {
         ? 'memory.md is absent; the private memory index is empty.'
         : 'memory.md is currently unreadable; do not use any earlier private memory context.')
     }
-    const text = `${renderMemberIdentity(member)}\n\n${memory}`
+    const workspaces = renderMemberWorkspaces(host.workspacesForAgent(agent))
+    const text = `${renderMemberIdentity(member)}\n\n${memory}${workspaces === '' ? '' : `\n\n${workspaces}`}`
     const latestText = agent.session.surface.nodes.toReversed().flatMap(sequence => {
       // `nodes` are event identities (SessionSeq); snapshotEvents takes log
       // offsets. Re-entering through the validating constructor keeps the two
@@ -61,6 +63,21 @@ export function renderMemberIdentity(member: Pick<AgentTeamAgentMember, 'handle'
   return member.description === ''
     ? `Team identity: you are @${member.handle}.`
     : `Team identity: you are @${member.handle} — ${member.description}`
+}
+
+/** A current address list, not a copy of instructions from another checkout. */
+export function renderMemberWorkspaces(workspaces: readonly { readonly workspaceId: string; readonly path: string | undefined; readonly default: boolean }[]): string {
+  if (workspaces.length <= 1) return ''
+  return [
+    'Team Workspace participation — this list replaces all earlier participation context.',
+    ...workspaces.map(workspace => `${workspace.workspaceId}${workspace.default ? ' (default; Session cwd)' : ''}: ${workspace.path === undefined
+      ? 'Workspace path unavailable; ask @human before filesystem work.'
+      : `${JSON.stringify(workspace.path)}; instructions: ${JSON.stringify(join(workspace.path, 'AGENTS.md'))}`}`),
+    'Your single Session and cwd stay in the default Workspace. Joining another Workspace does not move them.',
+    'For filesystem work in another Workspace, use absolute paths (or an explicit command cwd). Before working there, read its AGENTS.md and applicable directory instructions yourself; their contents are not injected here.',
+    'Pass workspace explicitly to team_view, team_thread, team_message and team_claim. team_inbox is the cross-Workspace triage entry point.',
+    'If an instruction is ambiguous about which Workspace it concerns, ask @human before acting. Participation does not itself join Channels.',
+  ].join('\n')
 }
 
 /** The four private-memory paths plus the out-of-cwd warning; callers append their own sentence. */

@@ -24,6 +24,7 @@ const ACCEPT_FACT = {
 describe('team_thread renders the model-facing decision surface', () => {
   it('an accept activity renders actor, Task ref, and the Claims it concluded — not a bare kind', () => {
     const text = renderText(teamTools().get('team_thread')!, {}, {
+      workspaceId: 'workspace:alpha', channelRef: 'channel:046dd831-c679-4279-b6aa-7813476cf12e',
       kind: 'read', threadRef: 'thread:cb7e5eca-9a73-4fa6-9fdf-260996597e7d',
       taskRef: 'task:205a8ba6-f3c6-4fbc-95b7-c3448191f730',
       revision: 8190, status: 'done', resolution: 'accepted', following: true,
@@ -35,7 +36,7 @@ describe('team_thread renders the model-facing decision surface', () => {
     // The outcome line names the Thread, and the context line carries the
     // Task's standing — never just the Thread revision.
     expect(text).toContain('thread:cb7e5eca-9a73-4fa6-9fdf-260996597e7d')
-    expect(text.split('\n')[0]).toContain('thread:cb7e5eca-9a73-4fa6-9fdf-260996597e7d')
+    expect(text.split('\n')[1]).toContain('thread:cb7e5eca-9a73-4fa6-9fdf-260996597e7d')
     expect(text).toContain('task:205a8ba6-f3c6-4fbc-95b7-c3448191f730')
     expect(text).toContain('accepted')
     // The activity line names the actor and every Claim the acceptance
@@ -48,6 +49,7 @@ describe('team_thread renders the model-facing decision surface', () => {
 
   it('an unread accept with usage below the task-boundary threshold advises keeping the context', () => {
     const text = renderText(teamTools().get('team_thread')!, {}, {
+      workspaceId: 'workspace:alpha', channelRef: 'channel:046dd831-c679-4279-b6aa-7813476cf12e',
       kind: 'read', threadRef: 'thread:x', taskRef: 'task:x', revision: 100, status: 'done', resolution: 'accepted', following: true,
       anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor', sequence: 1 },
       claims: [], facts: [ACCEPT_FACT],
@@ -67,6 +69,7 @@ describe('team_thread renders the model-facing decision surface', () => {
 
   it('an unread accept at or above the threshold advises a fresh rollover after closeout', () => {
     const text = renderText(teamTools().get('team_thread')!, {}, {
+      workspaceId: 'workspace:alpha', channelRef: 'channel:046dd831-c679-4279-b6aa-7813476cf12e',
       kind: 'read', threadRef: 'thread:x', taskRef: 'task:x', revision: 100, status: 'done', resolution: 'accepted', following: true,
       anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor', sequence: 1 },
       claims: [], facts: [ACCEPT_FACT],
@@ -84,6 +87,7 @@ describe('team_thread renders the model-facing decision surface', () => {
 
   it('an unread accept already at handoffAt advises handing off now', () => {
     const text = renderText(teamTools().get('team_thread')!, {}, {
+      workspaceId: 'workspace:alpha', channelRef: 'channel:046dd831-c679-4279-b6aa-7813476cf12e',
       kind: 'read', threadRef: 'thread:x', taskRef: 'task:x', revision: 100, status: 'done', resolution: 'accepted', following: true,
       anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor', sequence: 1 },
       claims: [], facts: [ACCEPT_FACT],
@@ -100,6 +104,7 @@ describe('team_thread renders the model-facing decision surface', () => {
 
   it('a read without unread accepts renders no context advice section', () => {
     const text = renderText(teamTools().get('team_thread')!, {}, {
+      workspaceId: 'workspace:alpha', channelRef: 'channel:046dd831-c679-4279-b6aa-7813476cf12e',
       kind: 'read', threadRef: 'thread:x', revision: 100, following: false,
       anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor', sequence: 1 },
       claims: [],
@@ -109,11 +114,12 @@ describe('team_thread renders the model-facing decision surface', () => {
     // Taskless results keep the identifying surface: the outcome line still
     // names the Thread even when there is no Task standing to state.
     expect(text).toContain('thread:x')
-    expect(text.split('\n')[0]).toContain('thread:x')
+    expect(text.split('\n')[1]).toContain('thread:x')
     expect(text).not.toContain('Context guidance')
     expect(text).not.toContain('usageTokens')
     // The empty-facts status path keeps the same identifying header.
     const statusText = renderText(teamTools().get('team_thread')!, {}, {
+      workspaceId: 'workspace:alpha', channelRef: 'channel:046dd831-c679-4279-b6aa-7813476cf12e',
       kind: 'status', threadRef: 'thread:x', revision: 100, following: false,
       anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor', sequence: 1 },
       claims: [],
@@ -121,9 +127,10 @@ describe('team_thread renders the model-facing decision surface', () => {
       readThroughSequence: 12, remainingUnreadCount: 0,
     })
     expect(statusText).toContain('thread:x')
-    expect(statusText.split('\n')[0]).toContain('thread:x')
+    expect(statusText.split('\n')[1]).toContain('thread:x')
     // Advice never appears for a non-accept activity even when unread.
     const activityText = renderText(teamTools().get('team_thread')!, {}, {
+      workspaceId: 'workspace:alpha', channelRef: 'channel:046dd831-c679-4279-b6aa-7813476cf12e',
       kind: 'read', threadRef: 'thread:x', revision: 100, following: false,
       anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor', sequence: 1 },
       claims: [],
@@ -148,6 +155,7 @@ describe('team_thread renders the model-facing decision surface', () => {
 
   it('an unavailable measurement renders an explicit fallback, never a fabricated threshold verdict', () => {
     const text = renderText(teamTools().get('team_thread')!, {}, {
+      workspaceId: 'workspace:alpha', channelRef: 'channel:046dd831-c679-4279-b6aa-7813476cf12e',
       kind: 'read', threadRef: 'thread:x', taskRef: 'task:x', revision: 100, status: 'done', resolution: 'accepted', following: true,
       anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor', sequence: 1 },
       claims: [], facts: [ACCEPT_FACT],
@@ -164,6 +172,7 @@ describe('team_thread renders the model-facing decision surface', () => {
 
   it('a read that left facts behind states how many, so a returning reader sees the span it is not looking at', () => {
     const text = renderText(teamTools().get('team_thread')!, {}, {
+      workspaceId: 'workspace:alpha', channelRef: 'channel:046dd831-c679-4279-b6aa-7813476cf12e',
       kind: 'read', threadRef: 'thread:x', revision: 400, following: true,
       anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor', sequence: 1 },
       claims: [],

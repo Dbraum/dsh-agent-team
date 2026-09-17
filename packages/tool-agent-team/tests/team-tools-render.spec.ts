@@ -143,21 +143,22 @@ describe('team_inbox renders triage, not a read', () => {
 
 describe('team_thread status/follow/unfollow render Attention only', () => {
   const base = {
+    workspaceId: 'workspace:alpha', channelRef: CHANNEL,
     kind: 'status', threadRef: THREAD, taskRef: TASK, taskNumber: 7, revision: 8394, status: 'in_progress', resolution: 'open', following: true,
     anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor body', sequence: 1 },
     claims: [{ claimRef: CLAIM, direction: 'renderer fidelity', state: 'active', owner: 'member:6e8a5b10-df16-4ec0-943a-63738010953f' }],
     facts: [],
   }
-  it('status renders one Attention outcome line', () => {
+  it('status renders one Attention outcome line under its Workspace/Channel source', () => {
     const text = renderText(teamTools().get('team_thread')!, { action: 'status', threadRef: THREAD }, base)
-    expect(text).toBe(`Attention status — following ${THREAD} · ${TASK} (#7), in_progress/open.`)
+    expect(text).toBe(`Workspace: workspace:alpha · Channel: ${CHANNEL}\nAttention status — following ${THREAD} · ${TASK} (#7), in_progress/open.`)
   })
 
   it('follow/unfollow render one Attention-changed line; no anchor, Claims, facts, revision label, or token', () => {
     const follow = renderText(teamTools().get('team_thread')!, { action: 'follow', threadRef: THREAD }, { ...base, kind: 'follow' })
-    expect(follow).toBe(`Attention changed — now following ${THREAD} · ${TASK} (#7), in_progress/open.`)
+    expect(follow).toBe(`Workspace: workspace:alpha · Channel: ${CHANNEL}\nAttention changed — now following ${THREAD} · ${TASK} (#7), in_progress/open.`)
     const unfollow = renderText(teamTools().get('team_thread')!, { action: 'unfollow', threadRef: THREAD }, { ...base, kind: 'unfollow', following: false })
-    expect(unfollow).toBe(`Attention changed — no longer following ${THREAD} · ${TASK} (#7), in_progress/open.`)
+    expect(unfollow).toBe(`Workspace: workspace:alpha · Channel: ${CHANNEL}\nAttention changed — no longer following ${THREAD} · ${TASK} (#7), in_progress/open.`)
     for (const text of [follow, unfollow]) {
       expect(text).not.toContain('anchor body')
       expect(text).not.toContain(CLAIM)
@@ -168,11 +169,12 @@ describe('team_thread status/follow/unfollow render Attention only', () => {
 
   it('a taskless Attention render omits Task standing', () => {
     const text = renderText(teamTools().get('team_thread')!, { action: 'status', threadRef: THREAD }, {
+      workspaceId: 'workspace:alpha', channelRef: CHANNEL,
       kind: 'status', threadRef: THREAD, revision: 8394, following: false,
       anchor: { messageRef: 'message:anchor', sender: 'human', body: 'anchor body', sequence: 1 },
       claims: [], facts: [],
     })
-    expect(text).toBe(`Attention status — not following ${THREAD}.`)
+    expect(text).toBe(`Workspace: workspace:alpha · Channel: ${CHANNEL}\nAttention status — not following ${THREAD}.`)
   })
 })
 

@@ -60,12 +60,25 @@ describe('Team Member private memory composition', () => {
     await writeFile(own, 'own index')
     const ctx = new Context()
     const agent = fakeAgent(ctx)
-    ctx.provide('agentTeam', { memberForAgent: (subject: Agent) => subject === agent ? { privateMemoryPath: root } : undefined } as never)
+    const workspaces = [{ workspaceId: 'workspace:default', path: root, default: true }]
+    ctx.provide('agentTeam', {
+      memberForAgent: (subject: Agent) => subject === agent ? { privateMemoryPath: root } : undefined,
+      workspacesForAgent: () => workspaces,
+    } as never)
     await mount(ctx)
 
     const first = await preStep(ctx, agent)
     expect(first.kind === 'enter' && first.messages.at(-1)?.content[0]).toEqual(expect.objectContaining({ text: expect.stringContaining('own index') }))
     expect(first.kind === 'enter' && first.messages.at(-1)?.content[0]).toEqual(expect.objectContaining({ text: expect.stringContaining(`Private memory directory: ${root}`) }))
+
+    expect(first.kind === 'enter' && first.messages.at(-1)?.content[0]).not.toEqual(expect.objectContaining({ text: expect.stringContaining('Team Workspace participation') }))
+    workspaces.push({ workspaceId: 'workspace:other', path: join(root, 'other'), default: false })
+    const joined = await preStep(ctx, agent)
+    expect(joined.kind === 'enter' && joined.messages.at(-1)?.content[0]).toEqual(expect.objectContaining({ text: expect.stringContaining(join(root, 'other', 'AGENTS.md')) }))
+    expect(joined.kind === 'enter' && joined.messages.at(-1)?.content[0]).toEqual(expect.objectContaining({ text: expect.stringContaining('absolute paths') }))
+    workspaces.pop()
+    const left = await preStep(ctx, agent)
+    expect(left.kind === 'enter' && left.messages.at(-1)?.content[0]).not.toEqual(expect.objectContaining({ text: expect.stringContaining('workspace:other') }))
 
     await writeFile(own, 'replacement index')
     const second = await preStep(ctx, agent)
