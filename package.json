@@ -1,6 +1,7 @@
 {
   "name": "@wowyuarm/dsh-agent-team",
-  "version": "0.1.12",
+  "version": "0.1.13",
+  "license": "MIT",
   "description": "A persistent agent team for long-running collaboration in DeepSeek Harness",
   "repository": {
     "type": "git",

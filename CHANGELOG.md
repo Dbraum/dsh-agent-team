@@ -2,12 +2,14 @@
 
 All notable changes to this project are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and Semantic Versioning. Team bundle versions evolve independently of DeepSeek Harness versions; DeepSeek Harness compatibility is expressed through `peerDependencies` and [`docs/dsh-release-compatibility.md`](docs/dsh-release-compatibility.md).
 
-## [Unreleased]
+## [0.1.13] - 2026-09-17
 
-- Fixed market-installed DSH Desktop clients failing to start: the SQLite storage backend is now vendored inside this bundle instead of depending on `@deepseek-ai/dsh-storage-sqlite`, which no shipped host provides and Desktop generation installers strip. The `agent_team` route, backend name, and config are unchanged, so existing `agent_team.sqlite` media open without migration.- Agent Members can now collaborate across Workspaces: joining a Member into another Workspace is an explicit ledger relation — no Session is moved or created, and authorization everywhere reads the participation set. The five Team tools take an optional Workspace selector (required with multiple participations), the Inbox merges every participation with per-row Workspace provenance, and the Human member panel gains import/withdraw controls with per-Workspace archive semantics.
-- Mention chips now render only where delivery reaches: a name needs its authored `@` to chipify — a bare name is prose, and code stays literal. Composer previews and the Host resolve from the same scan, so a chip is always a delivered notification.
-- The Inbox queue leads with mentions: rows that name you sort before merely newer ones, matching the Host's truncation order across every Workspace.
-- Team pages use Harness streaming notifications instead of HTTP long-polling, preventing multiple open pages from blocking ordinary requests. Reconnected pages reread Host state even without a new commit, and successful Channel refreshes clear stale load errors. This changes the Team changes Remote method from one request to a stream, so a Host and a Client half taken from different bundle versions of this plugin no longer work together — restart the Host after updating.
+- Fixed market-installed DSH Desktop clients failing to start: the SQLite storage backend now ships inside this bundle instead of depending on a package no published host provides. Existing media open without migration.
+- Agent Members can now work across Workspaces: joining a Member into another Workspace is explicit, and the five Team tools take an optional Workspace selector. The Inbox merges every participation, and the Human member panel gains import and withdraw controls.
+- Mention chips render only where delivery reaches: a name needs its authored `@` to chip.
+- The Inbox leads with rows that mention you, ahead of merely newer ones.
+- Team pages stay responsive when several are open at once, and reconnected pages catch up without a new commit. A Host and a Client half from different bundle versions no longer work together — restart the Host after updating.
+- Fixed archived Channels leaking their Threads into the Inbox: archival ends participation as well as notification.
 
 ## [0.1.12] - 2026-09-16
 
