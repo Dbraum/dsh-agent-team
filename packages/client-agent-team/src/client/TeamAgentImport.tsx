@@ -62,14 +62,16 @@ export function TeamAgentImport({ workspaceId, loadMembers, joinWorkspace, onJoi
     }
   }
   return <div className={css.form}>
-    <p>{t('importAgentNotice')}</p>
-    {loading && <p role="status">{t('loadingAgents')}</p>}
-    {!loading && error === undefined && members.length === 0 && <p>{t('emptyImportAgents')}</p>}
-    {!loading && members.map(status => <TeamMemberRow key={status.member.memberId} status={status} t={t} action={{
-      label: pending === status.member.memberId ? t('importingAgent') : t('importAgent'),
-      disabled: pending !== undefined,
-      onSelect: () => { void join(status) },
-    }} />)}
-    {error !== undefined && <div role="alert"><p className={css.error}>{error}</p><Button disabled={pending !== undefined} variant="outline" onClick={() => { void load() }}>{t('retry')}</Button></div>}
+    <p className={css.notice}>{t('importAgentNotice')}</p>
+    {loading && <p className={css.state} role="status">{t('loadingAgents')}</p>}
+    {!loading && error === undefined && members.length === 0 && <p className={css.state}>{t('emptyImportAgents')}</p>}
+    {!loading && members.length > 0 && <div className={css.roster}>
+      {members.map(status => <TeamMemberRow key={status.member.memberId} status={status} t={t} action={{
+        label: pending === status.member.memberId ? t('importingAgent') : t('importAgent'),
+        disabled: pending !== undefined,
+        onSelect: () => { void join(status) },
+      }} />)}
+    </div>}
+    {error !== undefined && <div className={css.failure} role="alert"><p className={css.error}>{error}</p><Button disabled={pending !== undefined} variant="outline" onClick={() => { void load() }}>{t('retry')}</Button></div>}
   </div>
 }
