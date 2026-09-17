@@ -75,6 +75,7 @@ export async function runtimeWithTeam(options?: { mode?: 'team'; workspaceId?: s
       memberId, workspaceId, handle, description: `${handle} description`,
       presetId: 'team-member', state: 'enabled', sessionId: `session:${memberId}`,
     },
+    workspaceIds: [workspaceId],
     availability: presence === 'unavailable' ? 'unavailable' : 'active',
     presence,
     ...(diagnostic === undefined ? {} : { diagnostic }),
@@ -86,7 +87,17 @@ export async function runtimeWithTeam(options?: { mode?: 'team'; workspaceId?: s
     status('member:offline', 'w1', 'offline', 'unavailable', { class: 'preset-composition', detail: 'preset missing' }),
     status('member:builder-beta', 'w2', 'builder', 'available'),
   ]
-  const members = vi.fn(async ({ workspaceId }: { workspaceId: string }) => ({ ok: true, value: memberRows.filter(entry => entry.member.workspaceId === workspaceId) }))
+  const members = vi.fn(async ({ workspaceId }: { workspaceId?: string }) => ({ ok: true, value: memberRows.filter(entry => workspaceId === undefined || entry.workspaceIds.includes(workspaceId)) }))
+  const joinWorkspace = vi.fn(async (request: { memberId: string; workspaceId: string }) => {
+    const member = memberRows.find(entry => entry.member.memberId === request.memberId)!
+    if (!member.workspaceIds.includes(request.workspaceId)) member.workspaceIds.push(request.workspaceId)
+    return { ok: true as const, value: {} }
+  })
+  const leaveWorkspace = vi.fn(async (request: { memberId: string; workspaceId: string }) => {
+    const member = memberRows.find(entry => entry.member.memberId === request.memberId)!
+    member.workspaceIds = member.workspaceIds.filter(id => id !== request.workspaceId)
+    return { ok: true as const, value: {} }
+  })
   const addMember = vi.fn(async (request: AgentTeamAddMemberRequest) => ({ ok: true, value: {
     receipt: {},
     status: {
@@ -393,7 +404,7 @@ export async function runtimeWithTeam(options?: { mode?: 'team'; workspaceId?: s
   const publishChannelUpdate = () => { wakeAll() }
   // rc.1: the client injects the model-catalog sub-namespace explicitly.
   runtime.ctx.provide('remote.session', { modelCatalog })
-  runtime.ctx.provide('remote', { session: { modelCatalog }, agentTeam: { members, addMember, view: viewChannels, inbox, readThread, threadHistory: loadThreadHistory, threadObservations, putAttachment, getAttachment, createChannel, updateChannel, archiveChannel, updateMember, recoverMember, clearMemberContext, archiveMember, joinChannel, removeChannelMember, sendMessage, reply, changeTask, promoteThread, resolveTaskRefs, changes }, $stream: <T,>(options: ConstructorParameters<typeof RemoteStream<T>>[1]) => new RemoteStream(connection, options), $mount: async () => async () => {} } as never)
+  runtime.ctx.provide('remote', { session: { modelCatalog }, agentTeam: { members, joinWorkspace, leaveWorkspace, addMember, view: viewChannels, inbox, readThread, threadHistory: loadThreadHistory, threadObservations, putAttachment, getAttachment, createChannel, updateChannel, archiveChannel, updateMember, recoverMember, clearMemberContext, archiveMember, joinChannel, removeChannelMember, sendMessage, reply, changeTask, promoteThread, resolveTaskRefs, changes }, $stream: <T,>(options: ConstructorParameters<typeof RemoteStream<T>>[1]) => new RemoteStream(connection, options), $mount: async () => async () => {} } as never)
   runtime.ctx.provide('remote.agentTeam', {})
   runtime.ctx.provide('connection', { isLoopback: true, generation: { getSnapshot: () => ({}) }, state: { getSnapshot: () => ({}) }, rpc: {}, reconnect: vi.fn(), registerGenerationSource: vi.fn(), start: vi.fn(), stop: vi.fn() })
   await runtime.sessions.add({ id: 'ordinary-session', summary: { title: 'Ordinary', cwd: '/work/alpha' } })
@@ -417,5 +428,5 @@ export async function runtimeWithTeam(options?: { mode?: 'team'; workspaceId?: s
   const disposeSettings = runtime.slots.register({ name: 'sidebar.settings', priority: 0 }, BaselineSettings as never)
   const team = await runtime.mount({ inject: [...inject], apply })
   const view = runtime.renderRoot()
-  return { runtime, team, view, disposeWorkspace, disposeSettings, members, addMember, status, viewChannels, createChannel, updateChannel, archiveChannel, putAttachment, getAttachment, updateMember, recoverMember, clearMemberContext, archiveMember, modelCatalog, joinChannel, removeChannelMember, sendMessage, reply, changeTask, promoteThread, resolveTaskRefs, publishAgentReply, publishPresence, seedChannel, publishChannelUpdate, failChanges, recoverChanges, readThread, loadThreadHistory, threadObservations, changes, inbox, seedInbox }
+  return { runtime, team, view, disposeWorkspace, disposeSettings, members, joinWorkspace, leaveWorkspace, addMember, status, viewChannels, createChannel, updateChannel, archiveChannel, putAttachment, getAttachment, updateMember, recoverMember, clearMemberContext, archiveMember, modelCatalog, joinChannel, removeChannelMember, sendMessage, reply, changeTask, promoteThread, resolveTaskRefs, publishAgentReply, publishPresence, seedChannel, publishChannelUpdate, failChanges, recoverChanges, readThread, loadThreadHistory, threadObservations, changes, inbox, seedInbox }
 }

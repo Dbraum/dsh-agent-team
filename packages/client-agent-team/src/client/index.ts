@@ -12,6 +12,8 @@ import type {
   AgentTeamThreadReadRequest,
   AgentTeamCreateChannelRequest,
   AgentTeamGetAttachmentRequest,
+  AgentTeamJoinWorkspaceRequest,
+  AgentTeamLeaveWorkspaceRequest,
   AgentTeamJoinChannelRequest,
   AgentTeamMembersRequest,
   AgentTeamPromoteThreadRequest,
@@ -110,6 +112,8 @@ function registerModeShadow<T extends object>(
     recoverMember: (request: AgentTeamRecoverMemberRequest) => ctx.remote.agentTeam.recoverMember(request),
     clearMemberContext: (request: AgentTeamClearMemberContextRequest) => ctx.remote.agentTeam.clearMemberContext(request),
     archiveMember: (request: AgentTeamArchiveMemberRequest) => ctx.remote.agentTeam.archiveMember(request),
+    joinWorkspace: (request: AgentTeamJoinWorkspaceRequest) => ctx.remote.agentTeam.joinWorkspace(request),
+    leaveWorkspace: (request: AgentTeamLeaveWorkspaceRequest) => ctx.remote.agentTeam.leaveWorkspace(request),
     // The Host-scoped catalog needs no live Member, so suspended ones stay editable too.
     loadModels: () => ctx.remote.session.modelCatalog(),
     openMemberSession: openMemberSessionImpl,

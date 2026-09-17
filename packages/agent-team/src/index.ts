@@ -635,13 +635,14 @@ export default class AgentTeam extends TypertRemoteService {
     return Object.freeze({ resolved: Object.freeze(this.requireLedger().resolveTaskRefs(request.workspaceId, taskRefs)) })
   }
 
-  /** Return only this Workspace's current Member projection to the Client. */
+  /** Browser-safe Human roster, optionally filtered to one participation. */
   @Remote('members')
   membersForClient(request: AgentTeamMembersRequest): readonly AgentTeamClientMemberStatus[] {
-    this.requireWorkspace(request.workspaceId)
+    if (request.workspaceId !== undefined) this.requireWorkspace(request.workspaceId)
+    const ledger = this.requireLedger()
     return this.members()
-      .filter(status => this.requireLedger().participatesIn(status.member.memberId, request.workspaceId))
-      .map(({ member: { privateMemoryPath: _privateMemoryPath, ...member }, ...status }) => Object.freeze({ ...status, member: Object.freeze(member) }))
+      .filter(status => request.workspaceId === undefined || ledger.participatesIn(status.member.memberId, request.workspaceId))
+      .map(({ member: { privateMemoryPath: _privateMemoryPath, ...member }, ...status }) => Object.freeze({ ...status, member: Object.freeze(member), workspaceIds: ledger.workspacesOf(member.memberId) }))
   }
 
   /** Emit a current baseline, then coalesced invalidations until canceled. */

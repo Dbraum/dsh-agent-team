@@ -8,7 +8,11 @@ The single shared collaboration domain in one DSH home. It stores cross-member c
 
 ## Member
 
-A stable identity authorized to read, speak, claim work, and receive Inbox hints. A Member is identified by an immutable branded ref and bound to a Workspace. The first release has Human and Agent Members.
+A stable identity authorized to read, speak, claim work, and receive Inbox hints. A Member is identified by an immutable branded ref. Private memory, skills, persona, and model are Member-global facts, not per-Workspace state. The first release has Human and Agent Members.
+
+## Workspace Participation
+
+A join/leave relation between a Member and a Workspace, committed as ledger operations — the same relation shape as Channel membership, one rung above it (Workspace participation → Channel membership → Thread Attention). A Member's `workspaceId` records where it was created and never changes; authorization everywhere reads the current participation set, not the creation field. Joining grants collaboration immediately; it does not move or create the Member's Session. Each Member retains one Session lineage in its creation Workspace. Joining does not create another Session or offer cwd switching; collaboration in other participated Workspaces uses the same Session. The Human Member participates in every Workspace.
 
 ## Human Member
 
@@ -16,7 +20,7 @@ The special Member corresponding to the current Harness user. It participates in
 
 ## Agent Member
 
-A Member created and managed by Team. It is bound to one DSH Session, explicit team-enabled preset, and Workspace; ordinary Sessions and forks do not gain membership automatically.
+A Member created and managed by Team. Created inside one Workspace (its creation record), it joins further Workspaces through Workspace Participation. It runs one explicit team-enabled preset Session at a time, rooted in its creation Workspace; ordinary Sessions and forks do not gain membership automatically.
 
 ## Member Capabilities
 
@@ -110,9 +114,13 @@ The private bridge prose a Member passes to `context_rollover`; it is never a le
 
 Temporarily stop a Member's live Agent while retaining identity, Session, Claims, Attention, unread state, and private memory. Resume uses the same Session and durable unread to decide whether to hint Inbox.
 
+## Withdraw
+
+Leaving one Workspace: `team/member-workspace-left` ends the Member's participation there, exits its Channel memberships in that Workspace, releases that Workspace's active Claims, and clears its Attention there. Everything else — the Member identity, other participations, the live Session and its cwd, private memory — is untouched; the creation Workspace cannot be left — use global archival instead. The UI presents this as the destructive row action on a non-creation Workspace.
+
 ## Archive
 
-The reversible hidden third state between Suspend and Remove, for Members and Channels. `archiveMember` disposes the live session (private memory and the Session log stay on disk) and releases active Claims with public `claims_released` Activities; `archiveChannel` applies the same release shape across every owner on the Channel's Threads. Memberships survive archival (hidden state, not departure). Archived entities are gone from every Team API surface — projections, mention candidates, ref resolution, and ref-addressed reads reject with an explicit archived error — while the facts stay complete in the ledger for replay and a future restore. Removal from archived remains available as the data-hygiene path.
+The reversible hidden third state between Suspend and Remove, for Members and Channels. `archiveMember` disposes the live session (private memory and the Session log stay on disk) and releases active Claims across every participated Workspace with public `claims_released` Activities; `archiveChannel` applies the same release shape across every owner on the Channel's Threads. Memberships survive archival (hidden state, not departure). Archived entities are gone from every Team API surface — projections, mention candidates, ref resolution, and ref-addressed reads reject with an explicit archived error — while the facts stay complete in the ledger for replay and a future restore. Removal from archived remains available as the data-hygiene path.
 
 ## Remove
 

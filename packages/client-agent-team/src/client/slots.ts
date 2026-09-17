@@ -13,6 +13,10 @@ import type {
   AgentTeamCreateChannelResult,
   AgentTeamInbox,
   AgentTeamInboxRequest,
+  AgentTeamJoinWorkspaceRequest,
+  AgentTeamJoinWorkspaceResult,
+  AgentTeamLeaveWorkspaceRequest,
+  AgentTeamLeaveWorkspaceResult,
   AgentTeamJoinChannelRequest,
   AgentTeamJoinChannelResult,
   AgentTeamGetAttachmentRequest,
@@ -115,6 +119,8 @@ export type TeamSidebarProps = PropsRuntime<'sidebar.workspaces'>
      */
     clearMemberContext: (request: AgentTeamClearMemberContextRequest) => Promise<RemoteResult<AgentTeamClearMemberContextResult>>
     archiveMember: (request: AgentTeamArchiveMemberRequest) => Promise<RemoteResult<AgentTeamArchiveMemberResult>>
+    joinWorkspace: (request: AgentTeamJoinWorkspaceRequest) => Promise<RemoteResult<AgentTeamJoinWorkspaceResult>>
+    leaveWorkspace: (request: AgentTeamLeaveWorkspaceRequest) => Promise<RemoteResult<AgentTeamLeaveWorkspaceResult>>
     joinChannel: (request: AgentTeamJoinChannelRequest) => Promise<RemoteResult<AgentTeamJoinChannelResult>>
     removeChannelMember: (request: AgentTeamRemoveChannelMemberRequest) => Promise<RemoteResult<AgentTeamRemoveChannelMemberResult>>
     /** Session-independent Host model catalog (`llm.models`); needs no live Member. */

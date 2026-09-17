@@ -282,6 +282,15 @@ it('drives the complete opt-in Agent Team journey in real Web', async () => {
     // Creation has no Channel page anymore: membership is Channel-side.
     expect(await dialog.getByRole('button', { name: '初始频道' }).count()).toBe(0)
     if (name === 'builder') {
+      // The import entry shares the create dialog: toggling reveals the
+      // global Member roster — truthfully empty here, since no Member exists
+      // outside this Workspace yet — and toggling back restores the form
+      // with its input intact.
+      await dialog.getByRole('button', { name: '从其他 Workspace 引入' }).click()
+      await dialog.getByText('没有可引入的 Agent。').waitFor()
+      await page.screenshot({ path: join(UI03_SHOTS, 'agent-import-empty.png'), fullPage: true })
+      await dialog.getByRole('button', { name: '创建 Agent' }).click()
+      await expect.poll(() => dialog.getByLabel('名称').inputValue()).toBe('builder')
       await page.screenshot({ path: join(UI03_SHOTS, 'agent-create-modal.png'), fullPage: true })
       // The model picker caps its card and scrolls internally.
       await dialog.getByRole('button', { name: '模型' }).click()

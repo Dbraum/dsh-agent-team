@@ -18,7 +18,7 @@ Service 使用 `ctx.storageDomain`、`ctx.workspaceRegistry`、`ctx.agents`、`c
 
 `storage-domain` 在持久读取处校验每条 record，并拒绝被其他版本标记的 backend unit。Team 只在 `KvTable.put()` 完成后更新 projection。其 Fiber 持有 Domain handle；dispose 通过 Cordis 移除拒绝新的 Service 调用，排空已接受的 Domain write，并在名称可重新打开前关闭 backend unit。
 
-创建 Member 时，先提交稳定的 Member/session/Workspace/preset/private-memory 身份，再执行 unpublished Agent setup。Setup 挂载指定 preset，并在发布前检查带 marker 的 `team_message` 和全部八个 Team tools。失败只把该 Member 标为 unavailable。Suspend 等待所属 `AgentHandle` 完全停止；resume 和 Host remount 恢复同一个持久 session。
+创建 Member 时，先提交稳定的 Member/session/Workspace/preset/private-memory 身份，再执行 unpublished Agent setup。创建 Workspace 记录为 Member 的创建地；更多 Workspace 通过参与操作（`team/member-workspace-joined`/`team/member-workspace-left`）加入与退出——加入即获得协作能力，不移动 Session。Setup 挂载指定 preset，并在发布前检查带 marker 的 `team_message` 和全部八个 Team tools。失败只把该 Member 标为 unavailable。Suspend 等待所属 `AgentHandle` 完全停止；resume 和 Host remount 恢复同一个持久 session。
 
 归档（archival）是介于 suspend 与 remove 之间的可逆第三态，Member 与 Channel 通用。`archiveMember` 提交 `team/member-archived`，dispose 活跃 session（私有记忆与 Session log 留在磁盘），把 Session 从分组面归档，并释放该 Member 的活跃 Claim（公开 `claims_released` Activity + Attention/marker 清理）。`archiveChannel` 提交 `team/channel-archived`，对该频道全部 Threads 上所有 owner 做同样的释放。两种归档都保留 Memberships——是隐藏而非离开。归档实体在所有 Team API 面上"默认不存在"：投影、ref 解析（其 Task ref 不再解析，消息正文渲染为纯文本）、按 ref 的读取（`readThread`/`threadHistory`/`threadObservations`/`listClaims` 以明确的 archived 错误拒绝）——而事实在 ledger 中完整保留，供重放与未来恢复；这条边界正是归档与 remove 的分界。从归档态 remove 仍可用（数据卫生路径）；本轮有意不提供恢复入口（对齐 dsh session 归档现状）。
 

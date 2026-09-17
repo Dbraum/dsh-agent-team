@@ -8,7 +8,11 @@
 
 ## Member
 
-Agent Team 中可被授权读取、发言、认领和接收 Inbox 提示的稳定身份。Member 由不可变的 member ref 标识，并绑定一个 workspace。首版包含 Human Member 和 Agent Member。
+Agent Team 中可被授权读取、发言、认领和接收 Inbox 提示的稳定身份。Member 由不可变的 member ref 标识。私有记忆、skills、persona 与 model 是 Member 级全局事实，不是按 workspace 存放的状态。首版包含 Human Member 和 Agent Member。
+
+## Workspace Participation
+
+Member 与 workspace 之间可 join/leave 的关系，以 ledger operation 提交——与 channel membership 同一种关系形状，在其上一级（workspace participation → channel membership → Thread Attention）。Member 的 `workspaceId` 记录创建地且永不改变；所有授权都读当前参与集合而非创建字段。加入即获得协作能力，不会移动或创建 Member 的 session。当前每个 Member 只有创建 Workspace 下的一条 Session 血统；新增参与不创建另一条 Session，也不提供 cwd 切换。Member 可在其他已参与 Workspace 中发言、认领和回复。Human Member 参与每个 workspace。
 
 ## Human Member
 
@@ -16,7 +20,7 @@ Agent Team 中可被授权读取、发言、认领和接收 Inbox 提示的稳�
 
 ## Agent Member
 
-由 Agent Team 创建和管理的 Member。一个 Agent Member 绑定一个 dsh session、一个显式 team-enabled preset 和一个 workspace；普通 session 与 fork 不自动获得成员身份。
+由 Agent Team 创建和管理的 Member。创建于某个 workspace（其创建记录），后续通过 Workspace Participation 加入更多 workspace。本轮 Member 仍只运行一个 live Session，扎根于创建 workspace；按参与切分 Session 血统（每个 workspace 一条、可切换）是后续工作。普通 session 与 fork 不自动获得成员身份。
 
 ## Member Capabilities
 
@@ -114,9 +118,13 @@ Member 通过 `context_rollover` 传递的私有桥接正文；它绝不是 ledg
 
 临时停止 Agent Member 的 live Agent，同时保留成员身份、session、claims、Thread Attention、未读状态和私有 memory。Resume 恢复同一 session，并由 durable unread 决定是否重新提示 Inbox。
 
+## Withdraw
+
+离开一个 workspace：`team/member-workspace-left` 结束 Member 在该 workspace 的参与，退出其在该 workspace 的所有 channel 成员关系，释放该 workspace 的 active claims 并清除其 Thread Attention。其余一切——Member 身份、其他参与、live session 及其 cwd、私有 memory——都不受影响；创建 Workspace 不可撤回，应改用全量归档。UI 在非创建 workspace 上以此作为行上的破坏性动作。
+
 ## Archive
 
-介于 Suspend 与 Remove 之间的可逆隐藏第三态，适用于 Member 与 Channel。`archiveMember` 释放 live session（私有 memory 与 Session log 留在磁盘）并以公开 `claims_released` Activity 释放 active Claims；`archiveChannel` 对 Channel 上所有 Thread 的 owner 施加同样的释放形态。Membership 在归档后保留（隐藏态，非退出）。Archived 实体从所有 Team API surface 消失——projection、mention 候选、ref 解析、ref-addressed read 均以明确的 archived 错误拒绝——而事实完整保留在 ledger 中供重放与未来恢复。从 archived 状态 Remove 仍可作为数据清理路径。
+介于 Suspend 与 Remove 之间的可逆隐藏第三态，适用于 Member 与 Channel。`archiveMember` 释放 live session（私有 memory 与 Session log 留在磁盘）并以公开 `claims_released` Activity 释放全部参与 workspace 中的 active Claims；`archiveChannel` 对 Channel 上所有 Thread 的 owner 施加同样的释放形态。Membership 在归档后保留（隐藏态，非退出）。Archived 实体从所有 Team API surface 消失——projection、mention 候选、ref 解析、ref-addressed read 均以明确的 archived 错误拒绝——而事实完整保留在 ledger 中供重放与未来恢复。从 archived 状态 Remove 仍可作为数据清理路径。
 
 ## Remove
 

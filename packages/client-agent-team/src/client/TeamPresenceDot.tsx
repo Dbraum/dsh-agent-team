@@ -13,7 +13,7 @@ export function presenceLabel(status: AgentTeamClientMemberStatus, t: TeamSideba
 }
 
 /** One line of human-readable diagnostic text: the reason, plus the refused artifact path when one was reported. */
-export function diagnosticText(status: AgentTeamClientMemberStatus): string {
+export function diagnosticText(status: Pick<AgentTeamClientMemberStatus, 'diagnostic'>): string {
   const diagnostic = status.diagnostic
   if (diagnostic === undefined) return ''
   return diagnostic.location === undefined ? diagnostic.detail : `${diagnostic.detail} (${diagnostic.location.path})`

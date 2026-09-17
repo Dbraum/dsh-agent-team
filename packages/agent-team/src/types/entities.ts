@@ -179,11 +179,12 @@ export type AgentTeamClientMember = Omit<AgentTeamAgentMember, 'privateMemoryPat
 /** Browser-safe lifecycle projection. */
 export interface AgentTeamClientMemberStatus extends Omit<AgentTeamAgentMemberStatus, 'member'> {
   readonly member: AgentTeamClientMember
+  readonly workspaceIds: readonly WorkspaceId[]
 }
 
-/** Workspace-scoped request used by the Client Remote projection. */
+/** Human roster: omit Workspace to select from the global Member catalog. */
 export interface AgentTeamMembersRequest {
-  readonly workspaceId: WorkspaceId
+  readonly workspaceId?: WorkspaceId
 }
 
 /** Look up navigation facts for branded Task refs found in message bodies. */

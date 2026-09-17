@@ -16,6 +16,7 @@ import { diagnosticText, restartOffered } from './TeamPresenceDot.tsx'
 import { TeamRowMenu } from './TeamRowMenu.tsx'
 import { TeamSidebarSection } from './TeamSidebarSection.tsx'
 import { AgentEditorDialog, ModelPickerField, sameModel } from './TeamMemberEditor.tsx'
+import { TeamAgentImport } from './TeamAgentImport.tsx'
 import createCss from './create.module.css'
 import css from './sidebar.module.css'
 
@@ -27,6 +28,8 @@ interface TeamAgentsPanelProps {
   readonly updateMember: TeamSidebarProps['updateMember']
   readonly recoverMember: TeamSidebarProps['recoverMember']
   readonly archiveMember: TeamSidebarProps['archiveMember']
+  readonly joinWorkspace: TeamSidebarProps['joinWorkspace']
+  readonly leaveWorkspace: TeamSidebarProps['leaveWorkspace']
   readonly loadModels: TeamSidebarProps['loadModels']
   /** The Member Session currently embedded in the conversation seat, if any. */
   readonly memberSessionId?: AgentTeamClientMemberStatus['member']['sessionId']
@@ -35,11 +38,12 @@ interface TeamAgentsPanelProps {
   readonly t: TeamSidebarProps['t']
 }
 
-export function TeamAgentsPanel({ workspaceId, loadMembers, subscribeChanges, addMember, updateMember, recoverMember, archiveMember, loadModels, memberSessionId, openMemberSession, onCreatingChange, t }: TeamAgentsPanelProps) {
+export function TeamAgentsPanel({ workspaceId, loadMembers, subscribeChanges, addMember, updateMember, recoverMember, archiveMember, joinWorkspace, leaveWorkspace, loadModels, memberSessionId, openMemberSession, onCreatingChange, t }: TeamAgentsPanelProps) {
   const [members, setMembers] = useState<readonly AgentTeamClientMemberStatus[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
   const [formOpen, setFormOpen] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [handle, setHandle] = useState('')
   const [description, setDescription] = useState('')
   const [model, setModel] = useState<AgentTeamModelSelection | undefined>(undefined)
@@ -164,11 +168,10 @@ export function TeamAgentsPanel({ workspaceId, loadMembers, subscribeChanges, ad
     try {
       const result = await addMember(request)
       if (result.ok) {
+        const committed = { ...result.value.status, workspaceIds: [result.value.status.member.workspaceId] }
         setMembers(current => {
-          const retained = current.filter(status => status.member.memberId !== result.value.status.member.memberId)
-          return result.value.status.member.state === 'inactive' || result.value.status.member.state === 'archived'
-            ? retained
-            : [...retained, result.value.status]
+          const retained = current.filter(status => status.member.memberId !== committed.member.memberId)
+          return committed.member.state === 'inactive' || committed.member.state === 'archived' ? retained : [...retained, committed]
         })
         setHandle('')
         setDescription('')
@@ -222,9 +225,10 @@ export function TeamAgentsPanel({ workspaceId, loadMembers, subscribeChanges, ad
         title={t('addAgent')}
         closeLabel={t('close')}
         contentClassName={createCss.dialogContent!}
-        footer={<><Button variant="outline" disabled={creating} onClick={closeForm}>{t('cancel')}</Button><Button type="submit" form="team-agent-create-form" variant="primary" disabled={creating || handle.trim().length === 0}>{creating ? t('creatingAgent') : t('createAgent')}</Button></>}
+        footer={<><Button variant="outline" disabled={creating} onClick={closeForm}>{t('cancel')}</Button>{!importing && <Button type="submit" form="team-agent-create-form" variant="primary" disabled={creating || handle.trim().length === 0}>{creating ? t('creatingAgent') : t('createAgent')}</Button>}</>}
       >
-        <form id="team-agent-create-form" className={createCss.form} onSubmit={submit}>
+        <Button variant="outline" disabled={creating} aria-expanded={importing} onClick={() => { setImporting(value => !value); setError(undefined) }}>{importing ? t('createAgent') : t('importAgentTitle')}</Button>
+        {formOpen && importing ? <TeamAgentImport workspaceId={workspaceId} loadMembers={loadMembers} joinWorkspace={joinWorkspace} onPending={setCreating} onJoined={async () => { await refresh(); setFormOpen(false); queueMicrotask(() => { triggerRef.current?.focus() }) }} t={t} /> : <form id="team-agent-create-form" className={createCss.form} onSubmit={submit}>
           <label className={createCss.field}>
             <span>{t('agentName')}</span>
             <Input className={createCss.input!} value={handle} onChange={event => { setHandle(event.target.value); setRetryRequest(undefined) }} disabled={creating} autoFocus />
@@ -235,7 +239,7 @@ export function TeamAgentsPanel({ workspaceId, loadMembers, subscribeChanges, ad
           </label>
           <ModelPickerField model={model} onModelChange={choice => { setModel(choice); setRetryRequest(undefined) }} loadModels={loadModels} disabled={creating} t={t} />
           {formOpen && error !== undefined && <p className={createCss.error} role="alert">{error}</p>}
-        </form>
+        </form>}
       </Modal>
       <TeamSidebarSection
         title={t('agents')}
@@ -243,7 +247,7 @@ export function TeamAgentsPanel({ workspaceId, loadMembers, subscribeChanges, ad
         onToggle={open => { setSidebarSectionOpen(workspaceId, 'agents', open) }}
         actions={(
           <Tooltip label={t('addAgent')} delayMs={500}>
-            <button ref={triggerRef} type="button" className={css.iconButton} aria-label={t('addAgent')} onClick={() => { setError(undefined); setFormOpen(true) }}>
+            <button ref={triggerRef} type="button" className={css.iconButton} aria-label={t('addAgent')} onClick={() => { setError(undefined); setImporting(false); setFormOpen(true) }}>
               <IconPlusOutline16 size={14} />
             </button>
           </Tooltip>
@@ -256,7 +260,7 @@ export function TeamAgentsPanel({ workspaceId, loadMembers, subscribeChanges, ad
         <div className={css.agentList}>
           {orderedMembers.map(status => (
             <SortableRow key={status.member.memberId} drag={drag} orderKey={status.member.memberId}>
-              <AgentRow status={status} {...(memberSessionId === undefined ? {} : { current: status.member.sessionId === memberSessionId })} updateMember={updateMember} recoverMember={recoverMember} archiveMember={archiveMember} loadModels={loadModels} openMemberSession={openMemberSession} onUpdated={() => { void refresh() }} t={t} />
+              <AgentRow workspaceId={workspaceId} leaveWorkspace={leaveWorkspace} status={status} {...(memberSessionId === undefined ? {} : { current: status.member.sessionId === memberSessionId })} updateMember={updateMember} recoverMember={recoverMember} archiveMember={archiveMember} loadModels={loadModels} openMemberSession={openMemberSession} onUpdated={refresh} t={t} />
             </SortableRow>
           ))}
         </div>
@@ -276,7 +280,9 @@ export function TeamAgentsPanel({ workspaceId, loadMembers, subscribeChanges, ad
  * conversation page, the avatar carries identity plus the presence badge, and
  * the row menu opens the editor.
  */
-function AgentRow({ status, current, updateMember, recoverMember, archiveMember, loadModels, openMemberSession, onUpdated, t }: {
+function AgentRow({ workspaceId, leaveWorkspace, status, current, updateMember, recoverMember, archiveMember, loadModels, openMemberSession, onUpdated, t }: {
+  readonly workspaceId: WorkspaceId
+  readonly leaveWorkspace: TeamSidebarProps['leaveWorkspace']
   readonly status: AgentTeamClientMemberStatus
   /** This Member's Session is the one embedded in the conversation seat. */
   readonly current?: boolean
@@ -292,6 +298,9 @@ function AgentRow({ status, current, updateMember, recoverMember, archiveMember,
   const [editing, setEditing] = useState(false)
   const [archiving, setArchiving] = useState(false)
   const [rowAlert, setRowAlert] = useState<string>()
+  const [archivePending, setArchivePending] = useState(false)
+  const archiveRequest = useRef<ReturnType<typeof mintRequestId>>()
+  const withdrawing = workspaceId !== status.member.workspaceId
   // Both row actions ride the same runtime remote: the Host steers a live
   // session, rebuilds an orphaned composition, or re-runs a failed activation.
   const recover = async (): Promise<void> => {
@@ -324,17 +333,21 @@ function AgentRow({ status, current, updateMember, recoverMember, archiveMember,
     }
   }
   const archive = async (): Promise<void> => {
+    if (archivePending) return
+    setArchivePending(true)
+    setRowAlert(undefined)
+    archiveRequest.current ??= mintRequestId()
+    const request = { requestId: archiveRequest.current, memberId: status.member.memberId }
     try {
-      const result = await archiveMember({
-        requestId: mintRequestId(),
-        memberId: status.member.memberId,
-      })
+      const result = withdrawing ? await leaveWorkspace({ ...request, workspaceId }) : await archiveMember(request)
+      if (!result.ok) throw new Error(result.error.message)
+      setArchiving(false)
+      archiveRequest.current = undefined
       await onUpdated()
-      if (!result.ok) {
-        setRowAlert(t('archiveAgentFailed', { message: result.error.message }))
-      }
     } catch (cause) {
-      setRowAlert(t('archiveAgentFailed', { message: cause instanceof Error ? cause.message : String(cause) }))
+      setRowAlert(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setArchivePending(false)
     }
   }
   return (
@@ -350,7 +363,7 @@ function AgentRow({ status, current, updateMember, recoverMember, archiveMember,
               { id: 'edit', label: t('editAgent'), icon: <IconEditOutline16 /> },
               ...(status.presence === 'error' ? [{ id: 'resume', label: t('resumeAgent'), icon: <IconPlayOutline16 /> }] : []),
               ...(status.availability === 'unavailable' && restartOffered(status) ? [{ id: 'restart', label: t('restartAgent'), icon: <IconRefreshOutline16 /> }] : []),
-              { id: 'archive', label: t('archiveAgent'), icon: <IconArchiveOutline20 size={16} />, danger: true },
+              { id: 'archive', label: t(withdrawing ? 'withdrawAgent' : 'archiveAgent'), icon: <IconArchiveOutline20 size={16} />, danger: true },
             ]}
             onSelect={(id) => {
               if (id === 'edit') setEditing(true)
@@ -361,20 +374,22 @@ function AgentRow({ status, current, updateMember, recoverMember, archiveMember,
           />
         </span>
       </div>
-      {rowAlert !== undefined && <div className={css.rowAlert} role="alert">{rowAlert}</div>}
+      {!archiving && rowAlert !== undefined && <div className={css.rowAlert} role="alert">{rowAlert}</div>}
       {archiving && (
         <Modal
           open
-          onClose={() => { setArchiving(false) }}
-          title={t('archiveAgentTitle', { name: status.member.handle })}
+          onClose={() => { if (!archivePending) setArchiving(false) }}
+          title={t(withdrawing ? 'withdrawAgentTitle' : 'archiveAgentTitle', { name: status.member.handle })}
           closeLabel={t('close')}
           contentClassName={createCss.dialogContent!}
           footer={<>
-            <Button variant="outline" onClick={() => { setArchiving(false) }}>{t('cancel')}</Button>
-            <Button variant="primary" onClick={() => { setArchiving(false); void archive() }}>{t('archiveAgentConfirm')}</Button>
+            <Button variant="outline" disabled={archivePending} onClick={() => { setArchiving(false) }}>{t('cancel')}</Button>
+            <Button variant="primary" disabled={archivePending} onClick={() => { void archive() }}>{t(withdrawing ? 'withdrawAgent' : 'archiveAgentConfirm')}</Button>
           </>}
         >
-          <p className={createCss.error}>{t('archiveAgentNotice', { name: status.member.handle })}</p>
+          <p className={createCss.error}>{t(withdrawing ? 'withdrawAgentNotice' : 'archiveAgentNotice', { name: status.member.handle })}</p>
+          {!withdrawing && status.workspaceIds.length > 1 && <p>{t('archiveOtherWorkspaces', { count: status.workspaceIds.length - 1 })}</p>}
+          {rowAlert !== undefined && <p className={createCss.error} role="alert">{rowAlert}</p>}
         </Modal>
       )}
       {editing && (

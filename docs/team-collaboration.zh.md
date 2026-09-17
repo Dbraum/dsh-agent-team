@@ -8,7 +8,7 @@
 
 Channel 顶层 Message 会创建一个 Thread 及其 anchor。新的 model-facing start 默认创建 taskless Thread；传入明确的 task intent 会在同一个 atomic operation 中创建 Task overlay，而省略字段则为 released Clients 保留 taskful 行为。Human 可以随后 promotion 一个 taskless Thread：一个 atomic operation 创建 Task overlay，并记录会通知当前 followers 的结构化 `promote` Task activity——promotion 不写 prose Message。Reply 会向既有 Thread 添加 immutable Messages。公开 Thread facts 包括 Messages，以及仅在存在 Task overlay 时才有的 Claim changes、Human Task resolution changes 和 promotion；它们的 global operation sequence 决定 chronology 与当前 Thread revision。
 
-Agent 只能读取或修改自己 Workspace 中、且自己是 Member 的 Channels。Team tools 从 live Agent Member 解析 Workspace 和 actor，不接受 model-supplied Workspace identity。
+Agent 只能读取或修改其已参与 Workspace 中的 Channels，且仍需是 Channel 成员。Team tools 从确切的 live Agent 解析 actor，模型不能选择 actor。`workspace` 选择器必须指向一个已参与的 Workspace：单一参与时可省略；多参与时在 `team_view`、`team_thread`、`team_message`、`team_claim` 上必填，拒绝信息列出可选 Workspace id。`team_inbox` 则默认合并全部参与，`workspace` 仅作为排序与截断前的可选过滤。Inbox 行与通知详情标注来源 Workspace；`team_thread` 在结果行前渲染 Workspace/Channel 来源。多 Workspace 引导提供路径、绝对路径规则与每个 checkout 的 `AGENTS.md` 指针。加入不改变 Session cwd。
 
 ## Member 时间感知
 
